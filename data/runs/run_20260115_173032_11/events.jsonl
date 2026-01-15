@@ -1,0 +1,7 @@
+{"timestamp": 1768498232.0851204, "event": "state_enter", "state": "PLAN_APPROACH"}
+{"timestamp": 1768498232.0852754, "event": "plan_success", "planning_time_ms": 109}
+{"timestamp": 1768498232.085297, "event": "plan_fail", "failure_type": "IK"}
+{"timestamp": 1768498232.085312, "event": "recovery_action", "action": "Z_OFFSET", "retry_count": 1}
+{"timestamp": 1768498232.085328, "event": "exec_success", "exec_time_ms": 432}
+{"timestamp": 1768498232.0853508, "event": "metric", "max_joint_vel": 2.07}
+{"timestamp": 1768498232.085362, "event": "state_enter", "state": "SUCCESS"}

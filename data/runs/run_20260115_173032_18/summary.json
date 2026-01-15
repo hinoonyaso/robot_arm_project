@@ -1,0 +1,9 @@
+{
+  "planning_time_ms_mean": 130.0,
+  "planning_time_ms_median": 130.0,
+  "failure_type_counts": {},
+  "recovery_action_counts": {},
+  "recovery_success_rate": 1.0,
+  "max_joint_vel": 1.36,
+  "events": "events.jsonl"
+}

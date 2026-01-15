@@ -1,0 +1,5 @@
+{"timestamp": 1768498232.3487875, "event": "state_enter", "state": "PLAN_APPROACH"}
+{"timestamp": 1768498232.3488996, "event": "plan_success", "planning_time_ms": 140}
+{"timestamp": 1768498232.34892, "event": "exec_success", "exec_time_ms": 659}
+{"timestamp": 1768498232.348939, "event": "metric", "max_joint_vel": 2.25}
+{"timestamp": 1768498232.3489513, "event": "state_enter", "state": "SUCCESS"}

@@ -1,0 +1,4 @@
+assets/videos/*.mp4
+*.pyc
+__pycache__/
+colcon_ws/

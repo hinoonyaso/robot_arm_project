@@ -1,0 +1,3 @@
+# Optional: matplotlib if you want higher-quality plots
+# matplotlib
+python-pptx

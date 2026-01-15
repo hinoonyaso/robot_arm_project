@@ -1,0 +1,7 @@
+{"timestamp": 1768498232.2973132, "event": "state_enter", "state": "PLAN_APPROACH"}
+{"timestamp": 1768498232.2973697, "event": "plan_success", "planning_time_ms": 91}
+{"timestamp": 1768498232.2973855, "event": "plan_fail", "failure_type": "UNKNOWN"}
+{"timestamp": 1768498232.2973945, "event": "recovery_action", "action": "TIMEOUT_UP", "retry_count": 1}
+{"timestamp": 1768498232.2974057, "event": "exec_success", "exec_time_ms": 768}
+{"timestamp": 1768498232.297423, "event": "metric", "max_joint_vel": 1.53}
+{"timestamp": 1768498232.2974303, "event": "state_enter", "state": "SUCCESS"}
