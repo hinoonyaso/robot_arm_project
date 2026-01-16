@@ -70,9 +70,9 @@ TaskManager::TaskManager(const rclcpp::NodeOptions &options)
 }
 
 void TaskManager::enter_state(TaskState next_state) {
-  log_event("state_exit", {"state", to_string(state_)});
+  log_event("state_exit", {{"state", to_string(state_)}});
   state_ = next_state;
-  log_event("state_enter", {"state", to_string(state_)});
+  log_event("state_enter", {{"state", to_string(state_)}});
 }
 
 void TaskManager::log_event(const std::string &event_type,
@@ -105,15 +105,15 @@ void TaskManager::on_tick() {
       enter_state(TaskState::PLAN_APPROACH);
       break;
     case TaskState::PLAN_APPROACH:
-      log_event("plan_success", {"planning_time_ms", "120"});
+      log_event("plan_success", {{"planning_time_ms", "120"}});
       enter_state(TaskState::EXEC_APPROACH);
       break;
     case TaskState::EXEC_APPROACH:
-      log_event("exec_success", {"exec_time_ms", "540"});
+      log_event("exec_success", {{"exec_time_ms", "540"}});
       enter_state(TaskState::PLAN_GRASP);
       break;
     case TaskState::PLAN_GRASP:
-      log_event("plan_fail", {"failure_type", "IK"});
+      log_event("plan_fail", {{"failure_type", "IK"}});
       enter_state(TaskState::RECOVERY);
       break;
     case TaskState::RECOVERY:
@@ -128,7 +128,7 @@ void TaskManager::on_tick() {
       }
       break;
     case TaskState::FAIL_SAFE:
-      log_event("fail_safe", {"reason", "retries_exceeded"});
+      log_event("fail_safe", {{"reason", "retries_exceeded"}});
       tick_timer_->cancel();
       break;
     case TaskState::SUCCESS:
