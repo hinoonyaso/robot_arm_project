@@ -66,6 +66,7 @@ source install/setup.bash
 
 ### 원클릭 소스 (편의 스크립트)
 ROS2 패키지는 **빌드 후 워크스페이스 overlay를 source 해야** 실행됩니다. 빌드만으로 자동 source는 불가능하므로, 아래 스크립트를 제공했습니다.
+> `colcon build`는 새 쉘 환경을 만들지 않기 때문에, **현재 터미널에 환경 변수를 반영하려면 반드시 `source`가 필요**합니다.
 
 ```bash
 cd robot_arm_pick_place/colcon_ws
@@ -78,15 +79,20 @@ cd robot_arm_pick_place/colcon_ws
 ## 실행 커맨드 모음
 - 단발 데모:
 ```bash
-source robot_arm_pick_place/colcon_ws/install/setup.bash
+source install/setup.bash
 ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true stress_test:=false
 ```
 
 - 100회 스트레스 테스트:
 ```bash
-source robot_arm_pick_place/colcon_ws/install/setup.bash
+source install/setup.bash
 ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true stress_test:=true iterations:=100 csv_path:=/tmp/arm_pick_place_metrics.csv
 ```
+
+### 로봇팔 동작시키는 방법 (RViz)
+1. RViz2에서 `MotionPlanning` 패널을 열고 `Planning Group`을 `arm`으로 선택합니다.
+2. 목표 포즈를 인터랙티브 마커로 이동한 뒤 **Plan** → **Execute**를 클릭합니다.
+3. 그리퍼는 `gripper` 그룹을 선택해 `Joint` 값을 조정 후 **Plan/Execute**로 제어합니다.
 
 ## 토픽/서비스/액션 표
 | 분류 | 이름 | 타입 | 설명 |
