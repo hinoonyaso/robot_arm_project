@@ -1,12 +1,12 @@
 <?xml version="1.0"?>
 <robot name="simple_arm">
   <group name="arm">
-    <chain base_link="base_link" tip_link="ee_link"/>
+    <chain base_link="base_link" tip_link="tool0"/>
   </group>
   <group name="gripper">
     <joint name="finger_left_joint"/>
     <joint name="finger_right_joint"/>
   </group>
-  <end_effector name="gripper" parent_link="ee_link" group="gripper"/>
+  <end_effector name="gripper" parent_link="tool0" group="gripper"/>
   <virtual_joint name="world_joint" type="fixed" parent_frame="world" child_link="base_link"/>
 </robot>
