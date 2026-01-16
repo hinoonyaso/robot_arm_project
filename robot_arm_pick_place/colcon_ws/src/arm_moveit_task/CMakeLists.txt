@@ -9,6 +9,7 @@ ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS
   arm_moveit_task/pick_place_task.py
   DESTINATION lib/${PROJECT_NAME}
+  RENAME pick_place_task
 )
 
 if(BUILD_TESTING)
