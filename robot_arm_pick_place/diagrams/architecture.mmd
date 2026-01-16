@@ -1,0 +1,23 @@
+flowchart LR
+  subgraph Gazebo
+    world[Gazebo Classic World]
+    robot[6-DoF Arm + Gripper]
+    object[Pick Object]
+    world --> robot
+    world --> object
+  end
+
+  subgraph ROS2
+    rsp[robot_state_publisher]
+    ctrl[ros2_control + controllers]
+    moveit[MoveIt2 move_group]
+    rviz[RViz2 MotionPlanning]
+    task[arm_moveit_task state machine]
+  end
+
+  rsp --> moveit
+  ctrl --> robot
+  moveit --> task
+  task --> ctrl
+  task --> gazebo[Gazebo /set_entity_state]
+  rviz --> moveit

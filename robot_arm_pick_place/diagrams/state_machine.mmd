@@ -1,0 +1,20 @@
+stateDiagram-v2
+  [*] --> Home
+  Home --> ResetObject
+  ResetObject --> PreGrasp
+  PreGrasp --> Grasp
+  Grasp --> CloseGripper
+  CloseGripper --> Attach
+  Attach --> Lift
+  Lift --> PrePlace
+  PrePlace --> Place
+  Place --> OpenGripper
+  OpenGripper --> Detach
+  Detach --> Retreat
+  Retreat --> [*]
+
+  state Retry {
+    [*] --> Attempt
+    Attempt --> Attempt: retry
+    Attempt --> [*]: success
+  }
