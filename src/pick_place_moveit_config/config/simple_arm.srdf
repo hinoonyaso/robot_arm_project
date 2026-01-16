@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<robot name="simple_arm">
+  <group name="manipulator">
+    <chain base_link="base_link" tip_link="tool0"/>
+  </group>
+  <end_effector name="gripper" parent_link="tool0" group="manipulator"/>
+  <virtual_joint name="virtual_joint" type="fixed" parent_frame="world" child_link="base_link"/>
+</robot>

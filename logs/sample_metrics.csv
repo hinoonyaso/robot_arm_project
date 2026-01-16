@@ -1,0 +1,5 @@
+timestamp,episode_id,planning_time,execution_time,success,fail_reason
+2024-01-01T00:00:01Z,1,0.45,2.10,true,
+2024-01-01T00:00:10Z,2,0.50,2.05,true,
+2024-01-01T00:00:20Z,3,0.80,0.00,false,planning_failed
+2024-01-01T00:00:30Z,4,0.55,1.95,true,

@@ -1,0 +1,10 @@
+pick_place_state_machine:
+  ros__parameters:
+    planning_group: manipulator
+    ee_link: tool0
+    base_frame: base_link
+    object_frame: object
+    home_joint_positions: [0.0, -1.57, 1.57, 0.0, 1.57, 0.0]
+    max_retries: 3
+    timeout_s: 8.0
+    metrics_path: logs/metrics.csv

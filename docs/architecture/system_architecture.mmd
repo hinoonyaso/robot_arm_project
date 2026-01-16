@@ -1,0 +1,25 @@
+flowchart LR
+  subgraph Simulation
+    Gazebo[Gazebo Classic\n(gazebo_ros)]
+    Robot[Robot Arm + ros2_control]
+    Objects[Object/Obstacle]
+  end
+  subgraph Planning
+    MoveIt[MoveIt2\nmove_group]
+    PlanningScene[Planning Scene]
+  end
+  subgraph Application
+    SM[Pick&Place State Machine\n(pick_place_task)]
+    Metrics[Metrics Logger]
+  end
+  subgraph Visualization
+    RViz[RViz2]
+  end
+
+  SM --> MoveIt
+  MoveIt <--> PlanningScene
+  PlanningScene --> Gazebo
+  Gazebo --> Robot
+  Objects --> Gazebo
+  MoveIt --> RViz
+  SM --> Metrics

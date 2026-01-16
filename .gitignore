@@ -1,0 +1,27 @@
+# ROS2 build artifacts
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Metrics outputs
+logs/metrics.csv
+
+# Rendered docs
+/docs/metrics/*.png
+/docs/metrics/*.svg
+/docs/metrics/*.pdf
+/docs/architecture/*.png
+/docs/architecture/*.svg
+/docs/ppt/*.pdf
+/docs/ppt/*.html
+
+# Gazebo
+*.world
+
+# OS
+.DS_Store

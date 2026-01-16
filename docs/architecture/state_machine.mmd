@@ -1,0 +1,13 @@
+stateDiagram-v2
+  [*] --> HOME
+  HOME --> PREGRASP: plan_to_pregrasp
+  PREGRASP --> GRASP: cartesian_approach
+  GRASP --> LIFT: attach
+  LIFT --> PLACE: plan_to_place
+  PLACE --> RELEASE: cartesian_retreat
+  RELEASE --> HOME: detach
+  PREGRASP --> HOME: timeout/retry_exceeded
+  GRASP --> HOME: timeout/retry_exceeded
+  LIFT --> HOME: timeout/retry_exceeded
+  PLACE --> HOME: timeout/retry_exceeded
+  RELEASE --> HOME: timeout/retry_exceeded
