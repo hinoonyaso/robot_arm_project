@@ -52,7 +52,7 @@ sudo apt install -y \
   ros-humble-xacro ros-humble-joint-state-publisher-gui ros-humble-robot-state-publisher \
   ros-humble-rviz2 \
   ros-humble-moveit \
-  ros-humble-moveit-ros-planning-interface ros-humble-moveit-visual-tools \
+  ros-humble-moveit-ros-planning-interface ros-humble-moveit-ros-visualization ros-humble-moveit-visual-tools \
   python3-colcon-common-extensions python3-pip
 ```
 
@@ -132,6 +132,10 @@ iteration_id,stage_name,plan_success,exec_success,plan_time_ms,exec_time_ms,retr
 ## 파라미터
 - task 노드 파라미터는 arm_moveit_task/pick_place_task.py에서 선언되며 YAML로 오버라이드 가능
 - 각 pose 파라미터는 `[x, y, z, roll, pitch, yaw]`
+
+## MoveIt2 연동 방식
+- Humble 환경에서 `moveit_commander` 대신 `/move_group` 액션 + `/execute_trajectory` 액션을 사용합니다.
+- PlanningScene 충돌물체는 `/apply_planning_scene` 서비스로 추가합니다.
 
 ## 스크립트
 - `scripts/parse_metrics.py`: CSV 분석 요약 출력

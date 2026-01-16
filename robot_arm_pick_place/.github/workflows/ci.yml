@@ -24,7 +24,7 @@ jobs:
             ros-humble-xacro ros-humble-joint-state-publisher-gui ros-humble-robot-state-publisher \
             ros-humble-rviz2 \
             ros-humble-moveit \
-            ros-humble-moveit-ros-planning-interface ros-humble-moveit-visual-tools \
+            ros-humble-moveit-ros-planning-interface ros-humble-moveit-ros-visualization ros-humble-moveit-visual-tools \
             python3-colcon-common-extensions python3-pip
 
       - name: Build

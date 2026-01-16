@@ -9,13 +9,27 @@ from math import cos, sin
 from typing import Dict, List, Optional, Tuple
 
 import rclpy
+from rclpy.action import ActionClient
 from rclpy.node import Node
-from std_srvs.srv import Trigger
 from geometry_msgs.msg import Pose, PoseStamped
-from gazebo_msgs.srv import SetEntityState
 from gazebo_msgs.msg import EntityState
+from gazebo_msgs.srv import SetEntityState
+from moveit_msgs.action import ExecuteTrajectory, MoveGroup
+from moveit_msgs.msg import (
+    CollisionObject,
+    Constraints,
+    JointConstraint,
+    MotionPlanRequest,
+    MoveItErrorCodes,
+    OrientationConstraint,
+    PlanningOptions,
+    PositionConstraint,
+    RobotState,
+)
+from moveit_msgs.srv import ApplyPlanningScene
+from shape_msgs.msg import SolidPrimitive
+from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener
-from moveit_commander import MoveGroupCommander, PlanningSceneInterface, RobotCommander
 
 
 class StageResult(Enum):
@@ -57,34 +71,42 @@ class MetricsLogger:
     def _write_row(self, row: MetricsRow) -> None:
         directory = os.path.dirname(self._csv_path)
         if directory:
-            os.makedirs(directory, exist_ok=True)
+            try:
+                os.makedirs(directory, exist_ok=True)
+            except OSError:
+                self._csv_path = "/tmp/arm_pick_place_metrics.csv"
+                os.makedirs("/tmp", exist_ok=True)
         write_header = not self._header_written and not os.path.exists(self._csv_path)
         with open(self._csv_path, "a", newline="", encoding="utf-8") as csvfile:
             writer = csv.writer(csvfile)
             if write_header:
-                writer.writerow([
-                    "iteration_id",
-                    "stage_name",
-                    "plan_success",
-                    "exec_success",
-                    "plan_time_ms",
-                    "exec_time_ms",
-                    "retries_used",
-                    "fail_reason",
-                    "timestamp",
-                ])
+                writer.writerow(
+                    [
+                        "iteration_id",
+                        "stage_name",
+                        "plan_success",
+                        "exec_success",
+                        "plan_time_ms",
+                        "exec_time_ms",
+                        "retries_used",
+                        "fail_reason",
+                        "timestamp",
+                    ]
+                )
                 self._header_written = True
-            writer.writerow([
-                row.iteration_id,
-                row.stage_name,
-                row.plan_success,
-                row.exec_success,
-                f"{row.plan_time_ms:.2f}",
-                f"{row.exec_time_ms:.2f}",
-                row.retries_used,
-                row.fail_reason,
-                f"{row.timestamp:.3f}",
-            ])
+            writer.writerow(
+                [
+                    row.iteration_id,
+                    row.stage_name,
+                    row.plan_success,
+                    row.exec_success,
+                    f"{row.plan_time_ms:.2f}",
+                    f"{row.exec_time_ms:.2f}",
+                    row.retries_used,
+                    row.fail_reason,
+                    f"{row.timestamp:.3f}",
+                ]
+            )
 
     def summarize(self) -> Dict[str, float]:
         plan_times = [r.plan_time_ms for r in self._rows if r.plan_success]
@@ -121,20 +143,17 @@ class PickPlaceTask(Node):
         self.declare_parameter("metrics.csv_path", "/tmp/arm_pick_place_metrics.csv")
         self.declare_parameter("metrics.print_summary_every", 10)
 
+        self.ee_link = "ee_link"
+        self.planning_frame = "world"
+        self.arm_joint_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+        self.gripper_joint_names = ["finger_left_joint", "finger_right_joint"]
+
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        self.robot = RobotCommander()
-        self.scene = PlanningSceneInterface()
-        self.arm_group = MoveGroupCommander("arm")
-        self.gripper_group = MoveGroupCommander("gripper")
-
-        self.arm_group.set_planning_time(5.0)
-        self.arm_group.set_num_planning_attempts(3)
-        self.arm_group.set_max_velocity_scaling_factor(0.5)
-        self.arm_group.set_max_acceleration_scaling_factor(0.5)
-
-        self.gripper_group.set_planning_time(2.0)
+        self.move_group_client = ActionClient(self, MoveGroup, "move_group")
+        self.execute_client = ActionClient(self, ExecuteTrajectory, "execute_trajectory")
+        self.apply_scene_client = self.create_client(ApplyPlanningScene, "/apply_planning_scene")
 
         self.attach_service = self.create_service(Trigger, "/attach", self.handle_attach)
         self.detach_service = self.create_service(Trigger, "/detach", self.handle_detach)
@@ -173,7 +192,7 @@ class PickPlaceTask(Node):
         if not self.entity_client.service_is_ready():
             return
         try:
-            transform = self.tf_buffer.lookup_transform("world", "ee_link", rclpy.time.Time())
+            transform = self.tf_buffer.lookup_transform("world", self.ee_link, rclpy.time.Time())
         except Exception:
             return
         offset = self.get_parameter("ee_to_object_offset").get_parameter_value().double_array_value
@@ -189,22 +208,44 @@ class PickPlaceTask(Node):
         self.entity_client.call_async(SetEntityState.Request(state=state))
 
     def add_collision_objects(self) -> None:
-        table = PoseStamped()
-        table.header.frame_id = "world"
-        table.pose.position.x = 0.5
-        table.pose.position.y = 0.0
-        table.pose.position.z = 0.35
-        table.pose.orientation.w = 1.0
+        if not self.apply_scene_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warning("/apply_planning_scene service not available")
+            return
 
-        box = PoseStamped()
-        box.header.frame_id = "world"
-        box.pose.position.x = 0.55
-        box.pose.position.y = 0.0
-        box.pose.position.z = 0.72
-        box.pose.orientation.w = 1.0
+        table = CollisionObject()
+        table.id = "table"
+        table.header.frame_id = self.planning_frame
+        table.operation = CollisionObject.ADD
+        table_primitive = SolidPrimitive()
+        table_primitive.type = SolidPrimitive.BOX
+        table_primitive.dimensions = [0.8, 0.6, 0.7]
+        table_pose = Pose()
+        table_pose.position.x = 0.5
+        table_pose.position.y = 0.0
+        table_pose.position.z = 0.35
+        table_pose.orientation.w = 1.0
+        table.primitives = [table_primitive]
+        table.primitive_poses = [table_pose]
 
-        self.scene.add_box("table", table, size=(0.8, 0.6, 0.7))
-        self.scene.add_box("object_box", box, size=(0.04, 0.04, 0.04))
+        box = CollisionObject()
+        box.id = "object_box"
+        box.header.frame_id = self.planning_frame
+        box.operation = CollisionObject.ADD
+        box_primitive = SolidPrimitive()
+        box_primitive.type = SolidPrimitive.BOX
+        box_primitive.dimensions = [0.04, 0.04, 0.04]
+        box_pose = Pose()
+        box_pose.position.x = 0.55
+        box_pose.position.y = 0.0
+        box_pose.position.z = 0.72
+        box_pose.orientation.w = 1.0
+        box.primitives = [box_primitive]
+        box.primitive_poses = [box_pose]
+
+        request = ApplyPlanningScene.Request()
+        request.scene.is_diff = True
+        request.scene.world.collision_objects = [table, box]
+        self.apply_scene_client.call_async(request)
 
     def reset_object_pose(self) -> bool:
         if not self.entity_client.wait_for_service(timeout_sec=2.0):
@@ -222,6 +263,8 @@ class PickPlaceTask(Node):
 
     def task_loop(self) -> None:
         time.sleep(2.0)
+        self.wait_for_action(self.move_group_client, "move_group")
+        self.wait_for_action(self.execute_client, "execute_trajectory")
         self.add_collision_objects()
         if not self.get_parameter("enable_task").get_parameter_value().bool_value:
             self.get_logger().info("Task execution disabled; services only mode.")
@@ -233,6 +276,10 @@ class PickPlaceTask(Node):
             self.run_stress_test(iterations)
         else:
             self.run_single_iteration(1)
+
+    def wait_for_action(self, client: ActionClient, name: str) -> None:
+        if not client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().warning(f"Action server {name} not available yet.")
 
     def run_stress_test(self, iterations: int) -> None:
         print_every = int(self.get_parameter("metrics.print_summary_every").get_parameter_value().integer_value)
@@ -305,22 +352,19 @@ class PickPlaceTask(Node):
 
     def move_home(self) -> Tuple[StageResult, float, float]:
         joints = self.get_parameter("home_pose_joint_values").get_parameter_value().double_array_value
-        self.arm_group.set_joint_value_target(list(joints))
-        return self.plan_and_execute(self.arm_group)
+        return self.plan_joint_stage("arm", self.arm_joint_names, list(joints))
 
     def plan_pose_stage(self, param_name: str) -> Tuple[StageResult, float, float]:
         values = self.get_parameter(param_name).get_parameter_value().double_array_value
         pose = self.pose_from_xyz_rpy(values)
-        self.arm_group.set_pose_target(pose)
-        return self.plan_and_execute(self.arm_group)
+        constraints = self.pose_constraints(pose)
+        return self.plan_and_execute("arm", constraints)
 
     def close_gripper(self) -> Tuple[StageResult, float, float]:
-        self.gripper_group.set_joint_value_target([0.0, 0.0])
-        return self.plan_and_execute(self.gripper_group)
+        return self.plan_joint_stage("gripper", self.gripper_joint_names, [0.0, 0.0])
 
     def open_gripper(self) -> Tuple[StageResult, float, float]:
-        self.gripper_group.set_joint_value_target([0.04, 0.04])
-        return self.plan_and_execute(self.gripper_group)
+        return self.plan_joint_stage("gripper", self.gripper_joint_names, [0.04, 0.04])
 
     def attach_object(self) -> Tuple[StageResult, float, float]:
         self.attach_active = True
@@ -330,34 +374,105 @@ class PickPlaceTask(Node):
         self.attach_active = False
         return StageResult.SUCCESS, 0.0, 0.0
 
-    def plan_and_execute(self, group: MoveGroupCommander) -> Tuple[StageResult, float, float]:
-        start = time.perf_counter()
-        plan_result = group.plan()
-        plan_time = (time.perf_counter() - start) * 1000.0
+    def plan_joint_stage(self, group_name: str, joint_names: List[str], positions: List[float]) -> Tuple[StageResult, float, float]:
+        constraints = self.joint_constraints(joint_names, positions)
+        return self.plan_and_execute(group_name, constraints)
 
-        plan_success, plan = self.extract_plan(plan_result)
-        if not plan_success:
-            group.clear_pose_targets()
+    def plan_and_execute(self, group_name: str, constraints: Constraints) -> Tuple[StageResult, float, float]:
+        start = time.perf_counter()
+        plan_result = self.plan_motion(group_name, constraints)
+        plan_time = (time.perf_counter() - start) * 1000.0
+        if plan_result is None:
             return StageResult.PLAN_FAIL, plan_time, 0.0
 
         exec_start = time.perf_counter()
-        exec_success = group.execute(plan, wait=True)
+        exec_success = self.execute_trajectory(plan_result)
         exec_time = (time.perf_counter() - exec_start) * 1000.0
-        group.stop()
-        group.clear_pose_targets()
         if not exec_success:
             return StageResult.EXEC_FAIL, plan_time, exec_time
         return StageResult.SUCCESS, plan_time, exec_time
 
+    def plan_motion(self, group_name: str, constraints: Constraints):
+        goal = MoveGroup.Goal()
+        goal.request = MotionPlanRequest()
+        goal.request.group_name = group_name
+        goal.request.goal_constraints = [constraints]
+        goal.request.start_state = RobotState(is_diff=True)
+        goal.request.num_planning_attempts = 3
+        goal.request.allowed_planning_time = 5.0
+        goal.request.max_velocity_scaling_factor = 0.5
+        goal.request.max_acceleration_scaling_factor = 0.5
+        goal.planning_options = PlanningOptions()
+        goal.planning_options.plan_only = True
+        goal.planning_options.look_around = False
+        goal.planning_options.replan = False
+
+        send_future = self.move_group_client.send_goal_async(goal)
+        if not rclpy.spin_until_future_complete(self, send_future, timeout_sec=8.0):
+            return None
+        goal_handle = send_future.result()
+        if not goal_handle or not goal_handle.accepted:
+            return None
+        result_future = goal_handle.get_result_async()
+        if not rclpy.spin_until_future_complete(self, result_future, timeout_sec=10.0):
+            return None
+        result = result_future.result().result
+        if result.error_code.val != MoveItErrorCodes.SUCCESS:
+            return None
+        return result.planned_trajectory
+
+    def execute_trajectory(self, trajectory) -> bool:
+        goal = ExecuteTrajectory.Goal()
+        goal.trajectory = trajectory
+        send_future = self.execute_client.send_goal_async(goal)
+        if not rclpy.spin_until_future_complete(self, send_future, timeout_sec=5.0):
+            return False
+        goal_handle = send_future.result()
+        if not goal_handle or not goal_handle.accepted:
+            return False
+        result_future = goal_handle.get_result_async()
+        if not rclpy.spin_until_future_complete(self, result_future, timeout_sec=10.0):
+            return False
+        result = result_future.result().result
+        return result.error_code.val == MoveItErrorCodes.SUCCESS
+
+    def pose_constraints(self, pose: Pose) -> Constraints:
+        position = PositionConstraint()
+        position.header.frame_id = self.planning_frame
+        position.link_name = self.ee_link
+        sphere = SolidPrimitive()
+        sphere.type = SolidPrimitive.SPHERE
+        sphere.dimensions = [0.01]
+        position.constraint_region.primitives.append(sphere)
+        position.constraint_region.primitive_poses.append(pose)
+        position.weight = 1.0
+
+        orientation = OrientationConstraint()
+        orientation.header.frame_id = self.planning_frame
+        orientation.link_name = self.ee_link
+        orientation.orientation = pose.orientation
+        orientation.absolute_x_axis_tolerance = 0.1
+        orientation.absolute_y_axis_tolerance = 0.1
+        orientation.absolute_z_axis_tolerance = 0.1
+        orientation.weight = 1.0
+
+        constraints = Constraints()
+        constraints.position_constraints.append(position)
+        constraints.orientation_constraints.append(orientation)
+        return constraints
+
     @staticmethod
-    def extract_plan(plan_result) -> Tuple[bool, Optional[object]]:
-        if isinstance(plan_result, tuple) and len(plan_result) >= 2:
-            success = bool(plan_result[0])
-            plan = plan_result[1]
-            return success, plan
-        if plan_result:
-            return True, plan_result
-        return False, None
+    def joint_constraints(joint_names: List[str], positions: List[float]) -> Constraints:
+        constraints = Constraints()
+        for name, pos in zip(joint_names, positions):
+            joint = JointConstraint()
+            joint.joint_name = name
+            joint.position = pos
+            joint.tolerance_above = 0.01
+            joint.tolerance_below = 0.01
+            joint.weight = 1.0
+            constraints.joint_constraints.append(joint)
+        return constraints
 
     @staticmethod
     def pose_from_xyz_rpy(values: List[float]) -> Pose:
