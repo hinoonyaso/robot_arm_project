@@ -2,7 +2,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, Command
@@ -19,6 +19,7 @@ def generate_launch_description():
     description_share = get_package_share_directory("arm_description")
     gazebo_share = get_package_share_directory("arm_gazebo")
     moveit_share = get_package_share_directory("arm_moveit_config")
+    fastdds_profile = os.path.join(gazebo_share, "config", "fastdds_no_shm.xml")
 
     controller_params = os.path.join(gazebo_share, "config", "ros2_controllers.yaml")
     robot_description_content = Command(
@@ -135,6 +136,7 @@ def generate_launch_description():
             DeclareLaunchArgument("stress_test", default_value="false"),
             DeclareLaunchArgument("iterations", default_value="100"),
             DeclareLaunchArgument("csv_path", default_value="/tmp/arm_pick_place_metrics.csv"),
+            SetEnvironmentVariable("FASTDDS_DEFAULT_PROFILES_FILE", fastdds_profile),
             gazebo,
             robot_state_publisher,
             spawn_robot,
