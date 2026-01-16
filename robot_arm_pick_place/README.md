@@ -61,7 +61,19 @@ sudo apt install -y \
 cd robot_arm_pick_place/colcon_ws
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install
+source install/setup.bash
 ```
+
+### 원클릭 소스 (편의 스크립트)
+ROS2 패키지는 **빌드 후 워크스페이스 overlay를 source 해야** 실행됩니다. 빌드만으로 자동 source는 불가능하므로, 아래 스크립트를 제공했습니다.
+
+```bash
+cd robot_arm_pick_place/colcon_ws
+./setup_env.sh
+```
+
+> 매번 source가 번거로우면 `~/.bashrc`에 다음 줄을 추가할 수 있습니다.  
+> `source ~/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/install/setup.bash`
 
 ## 실행 커맨드 모음
 - 단발 데모:
@@ -124,6 +136,7 @@ iteration_id,stage_name,plan_success,exec_success,plan_time_ms,exec_time_ms,retr
 - **TF 꼬임**: world->base_link 고정 여부와 robot_state_publisher 실행 여부 확인.
 - **MoveIt plan 실패**: SRDF 그룹/kinematics.yaml 설정 확인, OMPL 플래너 파라미터 조정.
 - **Gazebo 서비스 명칭 차이**: `/gazebo/set_entity_state` 존재 여부 확인.
+- **RViz TF 에러**: RViz에서 Fixed Frame을 `base_link`로 설정하고 `robot_state_publisher` 및 `joint_state_broadcaster`가 실행 중인지 확인.
 
 ## 향후 확장
 - 비전 기반 픽(ArUco/Depth)으로 target pose 자동 추정
