@@ -9,14 +9,10 @@ from launch.substitutions import Command
 def generate_launch_description():
     description_share = get_package_share_directory("arm_description")
     moveit_share = get_package_share_directory("arm_moveit_config")
-    gazebo_share = get_package_share_directory("arm_gazebo")
-
     robot_description = Command(
         [
             "xacro ",
             os.path.join(description_share, "urdf", "arm.urdf.xacro"),
-            " ros2_control_params:=",
-            os.path.join(gazebo_share, "config", "ros2_controllers.yaml"),
         ]
     )
 
