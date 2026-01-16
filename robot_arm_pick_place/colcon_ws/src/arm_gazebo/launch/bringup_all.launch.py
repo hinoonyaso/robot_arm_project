@@ -137,6 +137,7 @@ def generate_launch_description():
             DeclareLaunchArgument("iterations", default_value="100"),
             DeclareLaunchArgument("csv_path", default_value="/tmp/arm_pick_place_metrics.csv"),
             SetEnvironmentVariable("FASTDDS_DEFAULT_PROFILES_FILE", fastdds_profile),
+            SetEnvironmentVariable("FASTRTPS_DEFAULT_PROFILES_FILE", fastdds_profile),
             gazebo,
             robot_state_publisher,
             spawn_robot,
