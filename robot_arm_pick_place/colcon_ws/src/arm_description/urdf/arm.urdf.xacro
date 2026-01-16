@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <robot name="simple_arm" xmlns:xacro="http://www.ros.org/wiki/xacro">
   <xacro:arg name="ros2_control_params" default=""/>
-  <xacro:property name="pi" value="3.141592653589793"/>
+  <xacro:property name="ros2_control_params" value="$(arg ros2_control_params)"/>
 
   <material name="gray">
     <color rgba="0.6 0.6 0.6 1.0"/>
