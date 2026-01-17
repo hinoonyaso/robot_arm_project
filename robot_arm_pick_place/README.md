@@ -145,6 +145,14 @@ iteration_id,stage_name,plan_success,exec_success,plan_time_ms,exec_time_ms,retr
 - **RViz TF 에러**: RViz에서 Fixed Frame을 `base_link`로 설정하고 `robot_state_publisher` 및 `joint_state_broadcaster`가 실행 중인지 확인.
 - **FastDDS SHM 에러로 Gazebo 종료**: `RTPS_TRANSPORT_SHM Error`가 반복되면 공유메모리 사용을 끈 프로필을 적용하세요. (본 프로젝트는 `arm_gazebo/config/fastdds_no_shm.xml`을 bringup에서 `FASTDDS_DEFAULT_PROFILES_FILE`/`FASTRTPS_DEFAULT_PROFILES_FILE`로 자동 적용)
 - **RViz MotionPlanning 패널 없음**: `ros-humble-moveit-ros-visualization` 패키지 설치 확인 및 RViz 재시작.
+- **MotionPlanning 플러그인 로드 실패**: 다음 순서로 패키지 설치 및 환경 재소스를 수행하세요.
+  ```bash
+  sudo apt update
+  sudo apt install ros-humble-moveit-ros-visualization
+  # 필요 시: sudo apt install --reinstall ros-humble-moveit-ros-visualization
+  source /opt/ros/humble/setup.bash
+  source install/setup.bash
+  ```
 - **/spawn_entity 없음**: world 파일에 `gazebo_ros_factory` 플러그인이 있어야 `/spawn_entity` 서비스가 생성됩니다 (`arm_world.world`에 기본 포함).
 - **FastDDS SHM 에러 지속**: `/dev/shm`의 fastrtps 잠금 파일 정리 후 재시도하거나 `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`로 전환하세요.
 
