@@ -8,5 +8,4 @@
     <joint name="finger_right_joint"/>
   </group>
   <end_effector name="gripper" parent_link="tool0" group="gripper"/>
-  <virtual_joint name="world_joint" type="fixed" parent_frame="world" child_link="base_link"/>
 </robot>
