@@ -208,9 +208,8 @@ class PickPlaceTask(Node):
         self.entity_client.call_async(SetEntityState.Request(state=state))
 
     def add_collision_objects(self) -> None:
-        if not self.apply_scene_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warning("/apply_planning_scene service not available")
-            return
+        while not self.apply_scene_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().info("Waiting for /apply_planning_scene service...")
 
         table = CollisionObject()
         table.id = "table"
@@ -279,8 +278,8 @@ class PickPlaceTask(Node):
             self.run_single_iteration(1)
 
     def wait_for_action(self, client: ActionClient, name: str) -> None:
-        if not client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().warning(f"Action server {name} not available yet.")
+        while not client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().info(f"Action server {name} not available yet. Waiting...")
 
     def wait_for_future(self, future, timeout_sec: float) -> bool:
         start_time = time.time()
