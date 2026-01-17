@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple
 
 import rclpy
 from rclpy.action import ActionClient
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 from geometry_msgs.msg import Pose, PoseStamped
 from gazebo_msgs.msg import EntityState
@@ -125,6 +126,7 @@ class MetricsLogger:
 class PickPlaceTask(Node):
     def __init__(self) -> None:
         super().__init__("arm_pick_place_task")
+        self.cb_group = ReentrantCallbackGroup()
         self.declare_parameter("enable_task", True)
         self.declare_parameter("home_pose_joint_values", [0.0, -0.7, 1.3, 0.0, 1.0, 0.0])
         self.declare_parameter("pre_grasp_pose", [0.55, 0.0, 0.82, 3.14, 0.0, 1.57])
@@ -151,17 +153,49 @@ class PickPlaceTask(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        self.move_group_client = ActionClient(self, MoveGroup, "move_group")
-        self.execute_client = ActionClient(self, ExecuteTrajectory, "execute_trajectory")
-        self.apply_scene_client = self.create_client(ApplyPlanningScene, "/apply_planning_scene")
+        self.move_group_client = ActionClient(
+            self,
+            MoveGroup,
+            "move_group",
+            callback_group=self.cb_group,
+        )
+        self.execute_client = ActionClient(
+            self,
+            ExecuteTrajectory,
+            "execute_trajectory",
+            callback_group=self.cb_group,
+        )
+        self.apply_scene_client = self.create_client(
+            ApplyPlanningScene,
+            "/apply_planning_scene",
+            callback_group=self.cb_group,
+        )
 
-        self.attach_service = self.create_service(Trigger, "/attach", self.handle_attach)
-        self.detach_service = self.create_service(Trigger, "/detach", self.handle_detach)
+        self.attach_service = self.create_service(
+            Trigger,
+            "/attach",
+            self.handle_attach,
+            callback_group=self.cb_group,
+        )
+        self.detach_service = self.create_service(
+            Trigger,
+            "/detach",
+            self.handle_detach,
+            callback_group=self.cb_group,
+        )
 
-        self.entity_client = self.create_client(SetEntityState, "/gazebo/set_entity_state")
+        self.entity_client = self.create_client(
+            SetEntityState,
+            "/gazebo/set_entity_state",
+            callback_group=self.cb_group,
+        )
         self.attach_active = False
         self.attached_entity = "object_box"
-        self.follow_timer = self.create_timer(1.0 / 30.0, self.follow_object)
+        self.follow_timer = self.create_timer(
+            1.0 / 30.0,
+            self.follow_object,
+            callback_group=self.cb_group,
+        )
 
         self.metrics_logger = MetricsLogger(
             self,
@@ -280,6 +314,7 @@ class PickPlaceTask(Node):
     def wait_for_action(self, client: ActionClient, name: str) -> None:
         while not client.wait_for_server(timeout_sec=5.0):
             self.get_logger().info(f"Action server {name} not available yet. Waiting...")
+        self.get_logger().info(f"Action server {name} connected!")
 
     def wait_for_future(self, future, timeout_sec: float) -> bool:
         start_time = time.time()
