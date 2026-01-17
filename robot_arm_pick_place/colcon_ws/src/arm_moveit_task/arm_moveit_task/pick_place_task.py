@@ -258,8 +258,9 @@ class PickPlaceTask(Node):
         state.pose.position.z = 0.72
         state.pose.orientation.w = 1.0
         future = self.entity_client.call_async(SetEntityState.Request(state=state))
-        rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
-        return future.done() and future.result() is not None
+        if not self.wait_for_future(future, timeout_sec=2.0):
+            return False
+        return future.result() is not None
 
     def task_loop(self) -> None:
         time.sleep(2.0)
@@ -280,6 +281,15 @@ class PickPlaceTask(Node):
     def wait_for_action(self, client: ActionClient, name: str) -> None:
         if not client.wait_for_server(timeout_sec=5.0):
             self.get_logger().warning(f"Action server {name} not available yet.")
+
+    def wait_for_future(self, future, timeout_sec: float) -> bool:
+        start_time = time.time()
+        while not future.done():
+            if time.time() - start_time > timeout_sec:
+                self.get_logger().warning("Future timed out")
+                return False
+            time.sleep(0.01)
+        return True
 
     def run_stress_test(self, iterations: int) -> None:
         print_every = int(self.get_parameter("metrics.print_summary_every").get_parameter_value().integer_value)
@@ -408,13 +418,13 @@ class PickPlaceTask(Node):
         goal.planning_options.replan = False
 
         send_future = self.move_group_client.send_goal_async(goal)
-        if not rclpy.spin_until_future_complete(self, send_future, timeout_sec=8.0):
+        if not self.wait_for_future(send_future, timeout_sec=8.0):
             return None
         goal_handle = send_future.result()
         if not goal_handle or not goal_handle.accepted:
             return None
         result_future = goal_handle.get_result_async()
-        if not rclpy.spin_until_future_complete(self, result_future, timeout_sec=10.0):
+        if not self.wait_for_future(result_future, timeout_sec=10.0):
             return None
         result = result_future.result().result
         if result.error_code.val != MoveItErrorCodes.SUCCESS:
@@ -425,13 +435,13 @@ class PickPlaceTask(Node):
         goal = ExecuteTrajectory.Goal()
         goal.trajectory = trajectory
         send_future = self.execute_client.send_goal_async(goal)
-        if not rclpy.spin_until_future_complete(self, send_future, timeout_sec=5.0):
+        if not self.wait_for_future(send_future, timeout_sec=5.0):
             return False
         goal_handle = send_future.result()
         if not goal_handle or not goal_handle.accepted:
             return False
         result_future = goal_handle.get_result_async()
-        if not rclpy.spin_until_future_complete(self, result_future, timeout_sec=10.0):
+        if not self.wait_for_future(result_future, timeout_sec=10.0):
             return False
         result = result_future.result().result
         return result.error_code.val == MoveItErrorCodes.SUCCESS
