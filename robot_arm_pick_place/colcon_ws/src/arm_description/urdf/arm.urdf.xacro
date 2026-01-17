@@ -25,12 +25,14 @@
       <geometry>
         <box size="0.2 0.2 0.05"/>
       </geometry>
+      <origin xyz="0 0 0.025" rpy="0 0 0"/>
       <material name="gray"/>
     </visual>
     <collision>
       <geometry>
         <box size="0.2 0.2 0.05"/>
       </geometry>
+      <origin xyz="0 0 0.025" rpy="0 0 0"/>
     </collision>
   </link>
 
@@ -235,7 +237,7 @@
   <joint name="joint1" type="revolute">
     <parent link="base_link"/>
     <child link="link1"/>
-    <origin xyz="0 0 0.025" rpy="0 0 0"/>
+    <origin xyz="0 0 0.05" rpy="0 0 0"/>
     <axis xyz="0 0 1"/>
     <limit lower="-3.141592653589793" upper="3.141592653589793" effort="50" velocity="1.5"/>
   </joint>

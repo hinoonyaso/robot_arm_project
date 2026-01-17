@@ -220,7 +220,7 @@ class PickPlaceTask(Node):
         table_primitive.type = SolidPrimitive.BOX
         table_primitive.dimensions = [0.8, 0.6, 0.7]
         table_pose = Pose()
-        table_pose.position.x = 0.5
+        table_pose.position.x = 0.52
         table_pose.position.y = 0.0
         table_pose.position.z = 0.35
         table_pose.orientation.w = 1.0
