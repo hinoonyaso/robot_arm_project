@@ -30,6 +30,12 @@ def generate_launch_description():
             controller_params,
         ]
     )
+    robot_description_semantic = open(
+        os.path.join(moveit_share, "config", "arm.srdf"),
+        "r",
+        encoding="utf-8",
+    ).read()
+    kinematics_yaml = os.path.join(moveit_share, "config", "kinematics.yaml")
 
     robot_state_publisher = Node(
         package="robot_state_publisher",
@@ -112,6 +118,14 @@ def generate_launch_description():
         name="rviz2",
         output="screen",
         arguments=["-d", os.path.join(moveit_share, "config", "moveit.rviz")],
+        parameters=[
+            {
+                "robot_description": robot_description_content,
+                "robot_description_semantic": robot_description_semantic,
+                "use_sim_time": True,
+            },
+            kinematics_yaml,
+        ],
     )
 
     task_node = Node(
