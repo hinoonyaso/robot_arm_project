@@ -15,6 +15,11 @@ def load_yaml(file_path):
         return None
 
 
+def merge_config(target_dict, config_yaml):
+    if config_yaml and "move_group" in config_yaml and "ros__parameters" in config_yaml["move_group"]:
+        target_dict.update(config_yaml["move_group"]["ros__parameters"])
+
+
 def generate_launch_description():
     description_share = get_package_share_directory("arm_description")
     moveit_share = get_package_share_directory("arm_moveit_config")
@@ -32,58 +37,51 @@ def generate_launch_description():
         robot_description_semantic = {"robot_description_semantic": file.read()}
 
     kinematics_yaml = load_yaml(os.path.join(moveit_share, "config", "kinematics.yaml"))
-    ompl_config = load_yaml(os.path.join(moveit_share, "config", "ompl_planning.yaml"))
-    moveit_controllers = load_yaml(os.path.join(moveit_share, "config", "controllers.yaml"))
     joint_limits_yaml = load_yaml(os.path.join(moveit_share, "config", "joint_limits.yaml"))
+    ompl_planning_yaml = load_yaml(os.path.join(moveit_share, "config", "ompl_planning.yaml"))
+    moveit_controllers = load_yaml(os.path.join(moveit_share, "config", "controllers.yaml"))
 
     planning_parameters = {
+        "use_sim_time": True,
         "moveit_controller_manager": "moveit_simple_controller_manager/MoveItSimpleControllerManager",
-        "moveit_manage_controllers": True,
-        "planning_pipeline": "ompl",
-        "planning_pipelines": ["ompl"],
         "planning_scene_monitor": {
             "publish_planning_scene": True,
             "publish_geometry_updates": True,
             "publish_state_updates": True,
             "publish_transforms_updates": True,
         },
-        "trajectory_execution": {
-            "allowed_execution_duration_scaling": 1.2,
-            "allowed_goal_duration_margin": 0.5,
-            "allowed_start_tolerance": 0.01,
-        },
-        "use_sim_time": True,
+        "planning_plugin": "ompl_interface/OMPLPlanner",
+        "request_adapters": (
+            "default_planner_request_adapters/AddTimeOptimalParameterization "
+            "default_planner_request_adapters/ResolveConstraintFrames "
+            "default_planner_request_adapters/FixWorkspaceBounds "
+            "default_planner_request_adapters/FixStartStateBounds"
+        ),
+        "start_state_max_bounds_error": 0.1,
     }
 
-    if ompl_config and "move_group" in ompl_config and "ros__parameters" in ompl_config["move_group"]:
-        planning_parameters.update(ompl_config["move_group"]["ros__parameters"])
+    merge_config(planning_parameters, kinematics_yaml)
+    merge_config(planning_parameters, joint_limits_yaml)
+    merge_config(planning_parameters, ompl_planning_yaml)
+    merge_config(planning_parameters, moveit_controllers)
 
-    if kinematics_yaml and "move_group" in kinematics_yaml and "ros__parameters" in kinematics_yaml["move_group"]:
-        planning_parameters.update(kinematics_yaml["move_group"]["ros__parameters"])
+    planning_parameters.update(robot_description)
+    planning_parameters.update(robot_description_semantic)
 
-    if (
-        joint_limits_yaml
-        and "move_group" in joint_limits_yaml
-        and "ros__parameters" in joint_limits_yaml["move_group"]
-    ):
-        planning_parameters.update(joint_limits_yaml["move_group"]["ros__parameters"])
-
-    if (
-        moveit_controllers
-        and "move_group" in moveit_controllers
-        and "ros__parameters" in moveit_controllers["move_group"]
-    ):
-        planning_parameters.update(moveit_controllers["move_group"]["ros__parameters"])
+    planning_parameters.update(
+        {
+            "moveit_manage_controllers": True,
+            "trajectory_execution.allowed_execution_duration_scaling": 1.2,
+            "trajectory_execution.allowed_goal_duration_margin": 0.5,
+            "trajectory_execution.allowed_start_tolerance": 0.01,
+        }
+    )
 
     move_group_node = Node(
         package="moveit_ros_move_group",
         executable="move_group",
         output="screen",
-        parameters=[
-            robot_description,
-            robot_description_semantic,
-            planning_parameters,
-        ],
+        parameters=[planning_parameters],
     )
 
     return LaunchDescription([move_group_node])
