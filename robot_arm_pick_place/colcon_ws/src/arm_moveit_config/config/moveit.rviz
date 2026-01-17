@@ -18,7 +18,7 @@ Visualization Manager:
       Enabled: true
       Name: MotionPlanning
       Robot Description: robot_description
-      Move Group Namespace: move_group
+      Move Group Namespace: ""
   Global Options:
     Fixed Frame: base_link
   Name: root

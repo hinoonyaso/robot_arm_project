@@ -1,4 +1,5 @@
 import os
+import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -35,7 +36,9 @@ def generate_launch_description():
         "r",
         encoding="utf-8",
     ).read()
-    kinematics_yaml = os.path.join(moveit_share, "config", "kinematics.yaml")
+    kinematics_yaml_path = os.path.join(moveit_share, "config", "kinematics.yaml")
+    with open(kinematics_yaml_path, "r", encoding="utf-8") as kinematics_file:
+        kinematics_config = yaml.safe_load(kinematics_file)["move_group"]["ros__parameters"]
 
     robot_state_publisher = Node(
         package="robot_state_publisher",
@@ -132,7 +135,7 @@ def generate_launch_description():
                 "robot_description_semantic": robot_description_semantic,
                 "use_sim_time": True,
             },
-            kinematics_yaml,
+            kinematics_config,
         ],
     )
 
