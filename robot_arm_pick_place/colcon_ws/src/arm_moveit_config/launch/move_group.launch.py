@@ -38,7 +38,20 @@ def generate_launch_description():
 
     planning_parameters = {
         "moveit_controller_manager": "moveit_simple_controller_manager/MoveItSimpleControllerManager",
-        "planning_scene_monitor": {"publish_planning_scene": True},
+        "moveit_manage_controllers": True,
+        "planning_pipeline": "ompl",
+        "planning_pipelines": ["ompl"],
+        "planning_scene_monitor": {
+            "publish_planning_scene": True,
+            "publish_geometry_updates": True,
+            "publish_state_updates": True,
+            "publish_transforms_updates": True,
+        },
+        "trajectory_execution": {
+            "allowed_execution_duration_scaling": 1.2,
+            "allowed_goal_duration_margin": 0.5,
+            "allowed_start_tolerance": 0.01,
+        },
         "use_sim_time": True,
     }
 
