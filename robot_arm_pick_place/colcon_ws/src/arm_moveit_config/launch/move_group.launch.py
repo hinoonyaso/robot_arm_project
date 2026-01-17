@@ -55,6 +55,13 @@ def generate_launch_description():
     ):
         planning_parameters.update(joint_limits_yaml["move_group"]["ros__parameters"])
 
+    if (
+        moveit_controllers
+        and "move_group" in moveit_controllers
+        and "ros__parameters" in moveit_controllers["move_group"]
+    ):
+        planning_parameters.update(moveit_controllers["move_group"]["ros__parameters"])
+
     move_group_node = Node(
         package="moveit_ros_move_group",
         executable="move_group",
@@ -63,7 +70,6 @@ def generate_launch_description():
             robot_description,
             robot_description_semantic,
             planning_parameters,
-            moveit_controllers or {},
         ],
     )
 
