@@ -44,6 +44,14 @@ def generate_launch_description():
         parameters=[{"robot_description": robot_description_content, "use_sim_time": True}],
     )
 
+    static_tf = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="static_transform_publisher",
+        arguments=["0", "0", "0", "0", "0", "0", "world", "base_link"],
+        output="screen",
+    )
+
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory("gazebo_ros"), "launch", "gazebo.launch.py")
@@ -154,6 +162,7 @@ def generate_launch_description():
             SetEnvironmentVariable("FASTRTPS_DEFAULT_PROFILES_FILE", fastdds_profile),
             gazebo,
             robot_state_publisher,
+            static_tf,
             spawn_robot,
             spawn_object,
             joint_state_spawner,
