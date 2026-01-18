@@ -307,16 +307,16 @@
   <joint name="finger_left_joint" type="prismatic">
     <parent link="ee_link"/>
     <child link="finger_left"/>
-    <origin xyz="0.03 0.03 0" rpy="0 0 0"/>
-    <axis xyz="0 0 1"/>
+    <origin xyz="0.03 0.025 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
     <limit lower="-0.01" upper="0.04" effort="10" velocity="0.2"/>
   </joint>
 
   <joint name="finger_right_joint" type="prismatic">
     <parent link="ee_link"/>
     <child link="finger_right"/>
-    <origin xyz="0.03 -0.03 0" rpy="0 0 0"/>
-    <axis xyz="0 0 1"/>
+    <origin xyz="0.03 -0.025 0" rpy="0 0 0"/>
+    <axis xyz="0 -1 0"/>
     <limit lower="-0.01" upper="0.04" effort="10" velocity="0.2"/>
   </joint>
 
