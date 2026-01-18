@@ -164,6 +164,33 @@ iteration_id,stage_name,plan_success,exec_success,plan_time_ms,exec_time_ms,retr
   ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true
   ```
   - 그래도 `Waiting for action server: move_group...`가 계속된다면, `ros2 action list`에서 액션 이름이 `/move_group`인지 확인하세요. 다른 네임스페이스(예: `/my_robot/move_group`)로 떠 있다면 `pick_place_task.py`에서 액션 이름을 맞춰야 합니다.
+  - RViz는 연결되는데 파이썬 노드만 발견 실패라면, CycloneDDS에서 루프백 인터페이스를 강제해 보세요.
+    ```bash
+    cd robot_arm_pick_place
+    cat <<'EOF' > cyclonedds.xml
+    <?xml version="1.0" encoding="UTF-8" ?>
+    <CycloneDDS xmlns="https://cdds.io/config" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+        <Domain>
+            <General>
+                <Interfaces>
+                    <NetworkInterface name="lo" priority="default" multicast="default" />
+                </Interfaces>
+                <AllowMulticast>true</AllowMulticast>
+            </General>
+            <Discovery>
+                <ParticipantIndex>auto</ParticipantIndex>
+                <MaxAutoParticipantIndex>100</MaxAutoParticipantIndex>
+                <Peers>
+                    <Peer address="localhost"/>
+                </Peers>
+            </Discovery>
+        </Domain>
+    </CycloneDDS>
+    EOF
+    export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    export CYCLONEDDS_URI=file://$(pwd)/cyclonedds.xml
+    ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true
+    ```
 
 ## 향후 확장
 - 비전 기반 픽(ArUco/Depth)으로 target pose 자동 추정
