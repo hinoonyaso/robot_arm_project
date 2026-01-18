@@ -10,8 +10,9 @@ from typing import Dict, List, Optional, Tuple
 
 import rclpy
 from rclpy.action import ActionClient
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
-from geometry_msgs.msg import Pose, PoseStamped
+from geometry_msgs.msg import Pose
 from gazebo_msgs.msg import EntityState
 from gazebo_msgs.srv import SetEntityState
 from moveit_msgs.action import ExecuteTrajectory, MoveGroup
@@ -148,20 +149,36 @@ class PickPlaceTask(Node):
         self.arm_joint_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
         self.gripper_joint_names = ["finger_left_joint", "finger_right_joint"]
 
+        self.callback_group = ReentrantCallbackGroup()
+
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        self.move_group_client = ActionClient(self, MoveGroup, "move_group")
-        self.execute_client = ActionClient(self, ExecuteTrajectory, "execute_trajectory")
-        self.apply_scene_client = self.create_client(ApplyPlanningScene, "/apply_planning_scene")
+        self.move_group_client = ActionClient(
+            self, MoveGroup, "move_group", callback_group=self.callback_group
+        )
+        self.execute_client = ActionClient(
+            self, ExecuteTrajectory, "execute_trajectory", callback_group=self.callback_group
+        )
+        self.apply_scene_client = self.create_client(
+            ApplyPlanningScene, "/apply_planning_scene", callback_group=self.callback_group
+        )
 
-        self.attach_service = self.create_service(Trigger, "/attach", self.handle_attach)
-        self.detach_service = self.create_service(Trigger, "/detach", self.handle_detach)
+        self.attach_service = self.create_service(
+            Trigger, "/attach", self.handle_attach, callback_group=self.callback_group
+        )
+        self.detach_service = self.create_service(
+            Trigger, "/detach", self.handle_detach, callback_group=self.callback_group
+        )
 
-        self.entity_client = self.create_client(SetEntityState, "/gazebo/set_entity_state")
+        self.entity_client = self.create_client(
+            SetEntityState, "/gazebo/set_entity_state", callback_group=self.callback_group
+        )
         self.attach_active = False
         self.attached_entity = "object_box"
-        self.follow_timer = self.create_timer(1.0 / 30.0, self.follow_object)
+        self.follow_timer = self.create_timer(
+            1.0 / 30.0, self.follow_object, callback_group=self.callback_group
+        )
 
         self.metrics_logger = MetricsLogger(
             self,
@@ -189,8 +206,6 @@ class PickPlaceTask(Node):
     def follow_object(self) -> None:
         if not self.attach_active:
             return
-        if not self.entity_client.service_is_ready():
-            return
         try:
             transform = self.tf_buffer.lookup_transform("world", self.ee_link, rclpy.time.Time())
         except Exception:
@@ -208,7 +223,7 @@ class PickPlaceTask(Node):
         self.entity_client.call_async(SetEntityState.Request(state=state))
 
     def add_collision_objects(self) -> None:
-        if not self.apply_scene_client.wait_for_service(timeout_sec=2.0):
+        if not self.apply_scene_client.wait_for_service(timeout_sec=5.0):
             self.get_logger().warning("/apply_planning_scene service not available")
             return
 
@@ -245,7 +260,13 @@ class PickPlaceTask(Node):
         request = ApplyPlanningScene.Request()
         request.scene.is_diff = True
         request.scene.world.collision_objects = [table, box]
-        self.apply_scene_client.call_async(request)
+
+        future = self.apply_scene_client.call_async(request)
+        try:
+            future.result(timeout=2.0)
+            self.get_logger().info("Collision objects added.")
+        except Exception as exc:
+            self.get_logger().warning(f"Failed to add collision objects: {exc}")
 
     def reset_object_pose(self) -> bool:
         if not self.entity_client.wait_for_service(timeout_sec=2.0):
@@ -257,15 +278,21 @@ class PickPlaceTask(Node):
         state.pose.position.y = 0.0
         state.pose.position.z = 0.72
         state.pose.orientation.w = 1.0
+
         future = self.entity_client.call_async(SetEntityState.Request(state=state))
-        rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
-        return future.done() and future.result() is not None
+        try:
+            res = future.result(timeout=2.0)
+            return res is not None and res.success
+        except Exception:
+            return False
 
     def task_loop(self) -> None:
         time.sleep(2.0)
         self.wait_for_action(self.move_group_client, "move_group")
         self.wait_for_action(self.execute_client, "execute_trajectory")
+
         self.add_collision_objects()
+
         if not self.get_parameter("enable_task").get_parameter_value().bool_value:
             self.get_logger().info("Task execution disabled; services only mode.")
             return
@@ -278,12 +305,17 @@ class PickPlaceTask(Node):
             self.run_single_iteration(1)
 
     def wait_for_action(self, client: ActionClient, name: str) -> None:
-        if not client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().warning(f"Action server {name} not available yet.")
+        while not client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().info(f"Waiting for Action server {name} to be available...")
+        self.get_logger().info(f"Action server {name} connected.")
 
     def run_stress_test(self, iterations: int) -> None:
         print_every = int(self.get_parameter("metrics.print_summary_every").get_parameter_value().integer_value)
-        sleep_between = self.get_parameter("stress_test.sleep_between_iterations_sec").get_parameter_value().double_value
+        sleep_between = (
+            self.get_parameter("stress_test.sleep_between_iterations_sec")
+            .get_parameter_value()
+            .double_value
+        )
         for iteration in range(1, iterations + 1):
             self.run_single_iteration(iteration)
             if iteration % print_every == 0:
@@ -316,7 +348,13 @@ class PickPlaceTask(Node):
         ]
 
         for name, func in stages:
-            result, plan_time, exec_time, retries = self.run_with_retries(name, func)
+            ret = self.run_with_retries(name, func)
+            if len(ret) == 4:
+                result, plan_time, exec_time, retries = ret
+            else:
+                result = StageResult.SUCCESS if ret else StageResult.EXEC_FAIL
+                plan_time, exec_time, retries = 0.0, 0.0, 0
+
             self.metrics_logger.log(
                 MetricsRow(
                     iteration_id=iteration_id,
@@ -326,7 +364,7 @@ class PickPlaceTask(Node):
                     plan_time_ms=plan_time,
                     exec_time_ms=exec_time,
                     retries_used=retries,
-                    fail_reason=result.value,
+                    fail_reason=result.value if isinstance(result, StageResult) else str(result),
                     timestamp=time.time(),
                 )
             )
@@ -335,19 +373,35 @@ class PickPlaceTask(Node):
                 break
 
     def run_with_retries(self, stage_name: str, func) -> Tuple[StageResult, float, float, int]:
-        timeout = self.get_parameter("stress_test.per_stage_timeout_sec").get_parameter_value().double_value
+        timeout = (
+            self.get_parameter("stress_test.per_stage_timeout_sec")
+            .get_parameter_value()
+            .double_value
+        )
         max_retries = int(
             self.get_parameter("stress_test.max_retries_per_stage").get_parameter_value().integer_value
         )
         for attempt in range(max_retries + 1):
             start_time = time.perf_counter()
-            result, plan_time, exec_time = func()
+            ret = func()
             elapsed = time.perf_counter() - start_time
+
+            if isinstance(ret, tuple) and len(ret) == 3:
+                result, plan_time, exec_time = ret
+            elif isinstance(ret, bool):
+                result = StageResult.SUCCESS if ret else StageResult.EXEC_FAIL
+                plan_time, exec_time = 0.0, 0.0
+            else:
+                result, plan_time, exec_time = StageResult.SUCCESS, 0.0, 0.0
+
             if elapsed > timeout:
                 result = StageResult.TIMEOUT
+
             if result == StageResult.SUCCESS:
                 return result, plan_time, exec_time, attempt
             self.get_logger().info(f"Retry {attempt + 1}/{max_retries} for stage {stage_name}")
+            time.sleep(0.5)
+
         return result, plan_time, exec_time, max_retries
 
     def move_home(self) -> Tuple[StageResult, float, float]:
@@ -374,20 +428,24 @@ class PickPlaceTask(Node):
         self.attach_active = False
         return StageResult.SUCCESS, 0.0, 0.0
 
-    def plan_joint_stage(self, group_name: str, joint_names: List[str], positions: List[float]) -> Tuple[StageResult, float, float]:
+    def plan_joint_stage(
+        self, group_name: str, joint_names: List[str], positions: List[float]
+    ) -> Tuple[StageResult, float, float]:
         constraints = self.joint_constraints(joint_names, positions)
         return self.plan_and_execute(group_name, constraints)
 
     def plan_and_execute(self, group_name: str, constraints: Constraints) -> Tuple[StageResult, float, float]:
         start = time.perf_counter()
-        plan_result = self.plan_motion(group_name, constraints)
+        plan_trajectory = self.plan_motion(group_name, constraints)
         plan_time = (time.perf_counter() - start) * 1000.0
-        if plan_result is None:
+
+        if plan_trajectory is None:
             return StageResult.PLAN_FAIL, plan_time, 0.0
 
         exec_start = time.perf_counter()
-        exec_success = self.execute_trajectory(plan_result)
+        exec_success = self.execute_trajectory(plan_trajectory)
         exec_time = (time.perf_counter() - exec_start) * 1000.0
+
         if not exec_success:
             return StageResult.EXEC_FAIL, plan_time, exec_time
         return StageResult.SUCCESS, plan_time, exec_time
@@ -408,16 +466,27 @@ class PickPlaceTask(Node):
         goal.planning_options.replan = False
 
         send_future = self.move_group_client.send_goal_async(goal)
-        if not rclpy.spin_until_future_complete(self, send_future, timeout_sec=8.0):
+
+        try:
+            goal_handle = send_future.result(timeout=10.0)
+        except Exception as exc:
+            self.get_logger().error(f"Plan Goal rejected or timed out: {exc}")
             return None
-        goal_handle = send_future.result()
+
         if not goal_handle or not goal_handle.accepted:
+            self.get_logger().error("Plan Goal rejected")
             return None
+
         result_future = goal_handle.get_result_async()
-        if not rclpy.spin_until_future_complete(self, result_future, timeout_sec=10.0):
+        try:
+            res = result_future.result(timeout=10.0)
+        except Exception as exc:
+            self.get_logger().error(f"Plan Result timed out: {exc}")
             return None
-        result = result_future.result().result
+
+        result = res.result
         if result.error_code.val != MoveItErrorCodes.SUCCESS:
+            self.get_logger().error(f"Planning failed with error code: {result.error_code.val}")
             return None
         return result.planned_trajectory
 
@@ -425,15 +494,22 @@ class PickPlaceTask(Node):
         goal = ExecuteTrajectory.Goal()
         goal.trajectory = trajectory
         send_future = self.execute_client.send_goal_async(goal)
-        if not rclpy.spin_until_future_complete(self, send_future, timeout_sec=5.0):
+
+        try:
+            goal_handle = send_future.result(timeout=5.0)
+        except Exception:
             return False
-        goal_handle = send_future.result()
+
         if not goal_handle or not goal_handle.accepted:
             return False
+
         result_future = goal_handle.get_result_async()
-        if not rclpy.spin_until_future_complete(self, result_future, timeout_sec=10.0):
+        try:
+            res = result_future.result(timeout=20.0)
+        except Exception:
             return False
-        result = result_future.result().result
+
+        result = res.result
         return result.error_code.val == MoveItErrorCodes.SUCCESS
 
     def pose_constraints(self, pose: Pose) -> Constraints:
@@ -486,10 +562,18 @@ class PickPlaceTask(Node):
 
     @staticmethod
     def quaternion_from_rpy(roll: float, pitch: float, yaw: float):
-        qx = sin(roll / 2) * cos(pitch / 2) * cos(yaw / 2) - cos(roll / 2) * sin(pitch / 2) * sin(yaw / 2)
-        qy = cos(roll / 2) * sin(pitch / 2) * cos(yaw / 2) + sin(roll / 2) * cos(pitch / 2) * sin(yaw / 2)
-        qz = cos(roll / 2) * cos(pitch / 2) * sin(yaw / 2) - sin(roll / 2) * sin(pitch / 2) * cos(yaw / 2)
-        qw = cos(roll / 2) * cos(pitch / 2) * cos(yaw / 2) + sin(roll / 2) * sin(pitch / 2) * sin(yaw / 2)
+        qx = sin(roll / 2) * cos(pitch / 2) * cos(yaw / 2) - cos(roll / 2) * sin(
+            pitch / 2
+        ) * sin(yaw / 2)
+        qy = cos(roll / 2) * sin(pitch / 2) * cos(yaw / 2) + sin(roll / 2) * cos(
+            pitch / 2
+        ) * sin(yaw / 2)
+        qz = cos(roll / 2) * cos(pitch / 2) * sin(yaw / 2) - sin(roll / 2) * sin(
+            pitch / 2
+        ) * cos(yaw / 2)
+        qw = cos(roll / 2) * cos(pitch / 2) * cos(yaw / 2) + sin(roll / 2) * sin(
+            pitch / 2
+        ) * sin(yaw / 2)
         quat = Pose().orientation
         quat.x = qx
         quat.y = qy
