@@ -278,8 +278,9 @@ class PickPlaceTask(Node):
             self.run_single_iteration(1)
 
     def wait_for_action(self, client: ActionClient, name: str) -> None:
-        if not client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().warning(f"Action server {name} not available yet.")
+        self.get_logger().info(f"Waiting for action server: {name}...")
+        while not client.wait_for_server(timeout_sec=1.0):
+            self.get_logger().info(f"Action server {name} not available, waiting...")
 
     def run_stress_test(self, iterations: int) -> None:
         print_every = int(self.get_parameter("metrics.print_summary_every").get_parameter_value().integer_value)
