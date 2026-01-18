@@ -12,6 +12,12 @@ install(PROGRAMS
   RENAME pick_place_task
 )
 
+install(PROGRAMS
+  arm_moveit_task/perception_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME perception_node
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
