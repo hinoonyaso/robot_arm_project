@@ -13,7 +13,7 @@ from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, PoseStamped
 from gazebo_msgs.msg import EntityState
 from gazebo_msgs.srv import SetEntityState
 from moveit_msgs.action import ExecuteTrajectory, MoveGroup
@@ -137,8 +137,15 @@ class PickPlaceTask(Node):
         self.declare_parameter("pre_place_pose", [0.4, -0.25, 0.82, 3.14, 0.0, 0.0])
         self.declare_parameter("place_pose", [0.4, -0.25, 0.76, 3.14, 0.0, 0.0])
         self.declare_parameter("retreat_pose", [0.4, -0.25, 0.90, 3.14, 0.0, 0.0])
-        
+
         self.declare_parameter("ee_to_object_offset", [0.0, 0.0, 0.08])
+        self.declare_parameter("perception.enabled", False)
+        self.declare_parameter("perception.topic", "/detected_object_pose")
+        self.declare_parameter("perception.timeout_sec", 1.0)
+        self.declare_parameter("perception.use_detected_orientation", False)
+        self.declare_parameter("perception.pre_grasp_offset", [0.0, 0.0, 0.08])
+        self.declare_parameter("perception.grasp_offset", [0.0, 0.0, 0.02])
+        self.declare_parameter("perception.lift_offset", [0.0, 0.0, 0.16])
         self.declare_parameter("stress_test.enabled", False)
         self.declare_parameter("stress_test.iterations", 100)
         self.declare_parameter("stress_test.per_stage_timeout_sec", 12.0)
@@ -166,6 +173,16 @@ class PickPlaceTask(Node):
         self.attach_service = self.create_service(Trigger, "/attach", self.handle_attach, callback_group=self.callback_group)
         self.detach_service = self.create_service(Trigger, "/detach", self.handle_detach, callback_group=self.callback_group)
 
+        self.detected_pose: Optional[PoseStamped] = None
+        perception_topic = self.get_parameter("perception.topic").get_parameter_value().string_value
+        self.create_subscription(
+            PoseStamped,
+            perception_topic,
+            self.handle_detected_pose,
+            10,
+            callback_group=self.callback_group,
+        )
+
         self.entity_client = self.create_client(SetEntityState, "/set_entity_state", callback_group=self.callback_group)
         self.attach_active = False
         self.attached_entity = "object_box"
@@ -180,6 +197,9 @@ class PickPlaceTask(Node):
 
         self.task_thread = threading.Thread(target=self.task_loop, daemon=True)
         self.task_thread.start()
+
+    def handle_detected_pose(self, msg: PoseStamped) -> None:
+        self.detected_pose = msg
 
     def handle_attach(self, request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
         self.attach_active = True
@@ -431,8 +451,7 @@ class PickPlaceTask(Node):
         return self.plan_joint_stage("arm", self.arm_joint_names, list(joints))
 
     def plan_pose_stage(self, param_name: str) -> Tuple[StageResult, float, float]:
-        values = self.get_parameter(param_name).get_parameter_value().double_array_value
-        pose = self.pose_from_xyz_rpy(values)
+        pose = self.build_target_pose(param_name)
         constraints = self.pose_constraints(pose)
         return self.plan_and_execute("arm", constraints)
 
@@ -556,6 +575,51 @@ class PickPlaceTask(Node):
         constraints = Constraints()
         constraints.position_constraints.append(position)
         return constraints
+
+    def build_target_pose(self, param_name: str) -> Pose:
+        values = self.get_parameter(param_name).get_parameter_value().double_array_value
+        default_pose = self.pose_from_xyz_rpy(values)
+
+        if not self.get_parameter("perception.enabled").get_parameter_value().bool_value:
+            return default_pose
+
+        detected_pose = self.get_fresh_detected_pose()
+        if detected_pose is None:
+            return default_pose
+
+        offsets = {
+            "pre_grasp_pose": self.get_parameter("perception.pre_grasp_offset").get_parameter_value().double_array_value,
+            "grasp_pose": self.get_parameter("perception.grasp_offset").get_parameter_value().double_array_value,
+            "lift_pose": self.get_parameter("perception.lift_offset").get_parameter_value().double_array_value,
+        }
+        if param_name not in offsets:
+            return default_pose
+
+        offset = offsets[param_name]
+        target_pose = Pose()
+        target_pose.position.x = detected_pose.position.x + offset[0]
+        target_pose.position.y = detected_pose.position.y + offset[1]
+        target_pose.position.z = detected_pose.position.z + offset[2]
+
+        use_detected_orientation = self.get_parameter(
+            "perception.use_detected_orientation"
+        ).get_parameter_value().bool_value
+        if use_detected_orientation:
+            target_pose.orientation = detected_pose.orientation
+        else:
+            target_pose.orientation = default_pose.orientation
+        return target_pose
+
+    def get_fresh_detected_pose(self) -> Optional[Pose]:
+        if self.detected_pose is None:
+            return None
+
+        timeout_sec = self.get_parameter("perception.timeout_sec").get_parameter_value().double_value
+        now = self.get_clock().now()
+        stamp = rclpy.time.Time.from_msg(self.detected_pose.header.stamp)
+        if (now - stamp).nanoseconds > int(timeout_sec * 1e9):
+            return None
+        return self.detected_pose.pose
 
     @staticmethod
     def joint_constraints(joint_names: List[str], positions: List[float]) -> Constraints:

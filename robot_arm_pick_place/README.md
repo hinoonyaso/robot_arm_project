@@ -159,6 +159,40 @@ iteration_id,stage_name,plan_success,exec_success,plan_time_ms,exec_time_ms,retr
 - 비전 기반 픽(ArUco/Depth)으로 target pose 자동 추정
 - 모바일 매니퓰레이터 연계 (Nav2 + MoveIt2)
 
+## 개선 로드맵 (우선순위 1 → 4)
+아래 항목을 **1, 2, 3, 4 순서로** 진행하면 포트폴리오 완성도가 급격히 상승합니다.
+
+### 1) Perception 모듈 추가 (카메라 + 3D 좌표 추정)
+- **목표**: Blind Grasping → "보이는 물체" 기반 Pick.
+- **핵심 작업**
+  - URDF/Xacro에 `camera_sensor` 추가(EE 또는 테이블 상부).
+  - `opencv-python + cv_bridge`로 빨간 박스 중심 픽셀 추출.
+  - Pinhole Camera Model + Depth로 (x, y, z) 3D 좌표 변환 후 Pick 목표로 전달.
+- **산출물**: `/detected_object_pose` (geometry_msgs/PoseStamped) 퍼블리시.
+
+### 2) Grasping 플러그인 업그레이드 (gazebo_ros_link_attacher)
+- **목표**: `SetEntityState` 기반 위치 강제 업데이트 제거 → 물리적으로 자연스러운 부착.
+- **핵심 작업**
+  - 외부 플러그인 `gazebo_ros_link_attacher` 설치/빌드.
+  - attach/detach 서비스 호출로 EE 링크와 물체 링크 간 Fixed Joint 생성.
+  - 기존 follow_object 타이머 제거.
+- **산출물**: `/link_attacher_node/attach` 및 `/detach` 서비스 연동.
+
+### 3) Cartesian Path 적용 (Approach/Retreat만)
+- **목표**: PreGrasp→Grasp, Place→Retreat 구간을 **직선**으로 이동.
+- **핵심 작업**
+  - MoveIt Python Interface `compute_cartesian_path` 또는 `GetCartesianPath` 서비스 사용.
+  - Approach/Retreat 단계에서만 Cartesian Path 적용 (나머지는 기존 PTP 유지).
+- **산출물**: `cartesian_success_rate`, `cartesian_fraction` 로그/메트릭 추가.
+
+### 4) Behavior Tree(BT) 도입 (py_trees)
+- **목표**: 확장 가능한 로직 + 장애 처리 유연화.
+- **핵심 작업**
+  - `py_trees` 또는 `py_trees_ros`로 기존 상태머신 대체.
+  - Sequence + Fallback 구조로 탐지/이동/그립/복구 분기.
+  - 리트라이/재탐색 등 복구 흐름 시각화 및 분리.
+- **산출물**: `bt_tree.dot` 또는 런타임 트리 시각화 스냅샷.
+
 ## 파라미터
 - task 노드 파라미터는 arm_moveit_task/pick_place_task.py에서 선언되며 YAML로 오버라이드 가능
 - 각 pose 파라미터는 `[x, y, z, roll, pitch, yaw]`
