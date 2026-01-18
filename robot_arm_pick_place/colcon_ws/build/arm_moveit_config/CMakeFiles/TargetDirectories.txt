@@ -1,9 +1,0 @@
-/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_config/CMakeFiles/uninstall.dir
-/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_config/CMakeFiles/arm_moveit_config_uninstall.dir
-/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_config/CMakeFiles/test.dir
-/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_config/CMakeFiles/edit_cache.dir
-/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_config/CMakeFiles/rebuild_cache.dir
-/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_config/CMakeFiles/list_install_components.dir
-/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_config/CMakeFiles/install.dir
-/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_config/CMakeFiles/install/local.dir
-/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_config/CMakeFiles/install/strip.dir
