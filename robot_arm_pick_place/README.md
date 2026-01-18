@@ -69,7 +69,6 @@ ROS2 패키지는 **빌드 후 워크스페이스 overlay를 source 해야** 실
 > `colcon build`는 새 쉘 환경을 만들지 않기 때문에, **현재 터미널에 환경 변수를 반영하려면 반드시 `source`가 필요**합니다.
 
 ```bash
-cd robot_arm_pick_place/colcon_ws
 ./setup_env.sh
 ```
 
