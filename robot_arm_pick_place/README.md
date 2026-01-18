@@ -98,6 +98,8 @@ ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true stress_test:=true
 2. `By topic` 또는 `By display type`에서 **Image**를 선택합니다.
 3. `Image` 디스플레이의 **Topic**을 `/camera/color/image_raw`로 설정합니다.
 4. 카메라 정보가 필요하면 **Add** → **Camera**를 추가한 뒤, `Camera`의 **Image Topic**을 동일하게 맞춥니다.
+5. 만약 Image 디스플레이 추가 시 RViz가 종료되면, **Camera** 디스플레이만 추가한 뒤 `Image Topic`과 `Camera Info Topic`을 각각 `/camera/color/image_raw`, `/camera/color/camera_info`로 설정해 보세요.
+6. 그래도 문제가 있으면 `Image` 디스플레이의 `Transport Hint`를 `raw`로 바꾸거나, 해상도를 낮춘 카메라 토픽(예: `/camera/color/image_raw/compressed`)이 있다면 그 토픽으로 변경하세요.
 
 ## 토픽/서비스/액션 표
 | 분류 | 이름 | 타입 | 설명 |
