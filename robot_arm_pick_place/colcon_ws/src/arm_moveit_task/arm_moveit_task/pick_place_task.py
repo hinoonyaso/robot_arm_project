@@ -10,6 +10,8 @@ from typing import Dict, List, Optional, Tuple
 
 import rclpy
 from rclpy.action import ActionClient
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from geometry_msgs.msg import Pose
 from gazebo_msgs.msg import EntityState
@@ -148,20 +150,37 @@ class PickPlaceTask(Node):
         self.arm_joint_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
         self.gripper_joint_names = ["finger_left_joint", "finger_right_joint"]
 
+        self.callback_group = ReentrantCallbackGroup()
+
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        self.move_group_client = ActionClient(self, MoveGroup, "/move_group")
-        self.execute_client = ActionClient(self, ExecuteTrajectory, "/execute_trajectory")
-        self.apply_scene_client = self.create_client(ApplyPlanningScene, "/apply_planning_scene")
+        self.move_group_client = ActionClient(
+            self, MoveGroup, "move_group", callback_group=self.callback_group
+        )
+        self.execute_client = ActionClient(
+            self, ExecuteTrajectory, "execute_trajectory", callback_group=self.callback_group
+        )
+        self.apply_scene_client = self.create_client(
+            ApplyPlanningScene, "apply_planning_scene", callback_group=self.callback_group
+        )
 
-        self.attach_service = self.create_service(Trigger, "/attach", self.handle_attach)
-        self.detach_service = self.create_service(Trigger, "/detach", self.handle_detach)
+        self.attach_service = self.create_service(
+            Trigger, "/attach", self.handle_attach, callback_group=self.callback_group
+        )
+        self.detach_service = self.create_service(
+            Trigger, "/detach", self.handle_detach, callback_group=self.callback_group
+        )
 
-        self.entity_client = self.create_client(SetEntityState, "/gazebo/set_entity_state")
+        self.entity_client = self.create_client(
+            SetEntityState, "/gazebo/set_entity_state", callback_group=self.callback_group
+        )
         self.attach_active = False
         self.attached_entity = "object_box"
-        self.follow_timer = self.create_timer(1.0 / 30.0, self.follow_object)
+
+        self.follow_timer = self.create_timer(
+            1.0 / 30.0, self.follow_object, callback_group=self.callback_group
+        )
 
         self.metrics_logger = MetricsLogger(
             self,
@@ -190,7 +209,9 @@ class PickPlaceTask(Node):
         if not self.attach_active:
             return
         try:
-            transform = self.tf_buffer.lookup_transform("world", self.ee_link, rclpy.time.Time())
+            transform = self.tf_buffer.lookup_transform(
+                "world", self.ee_link, rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=0.0)
+            )
         except Exception:
             return
         offset = self.get_parameter("ee_to_object_offset").get_parameter_value().double_array_value
@@ -207,7 +228,7 @@ class PickPlaceTask(Node):
 
     def add_collision_objects(self) -> None:
         if not self.apply_scene_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().warning("/apply_planning_scene service not available")
+            self.get_logger().warning("apply_planning_scene service not available")
             return
 
         table = CollisionObject()
@@ -272,8 +293,8 @@ class PickPlaceTask(Node):
     def task_loop(self) -> None:
         self.get_logger().info("Task Thread Started. Waiting for system ready...")
         time.sleep(2.0)
-        self.wait_for_action(self.move_group_client, "/move_group")
-        self.wait_for_action(self.execute_client, "/execute_trajectory")
+        self.wait_for_action(self.move_group_client, "move_group")
+        self.wait_for_action(self.execute_client, "execute_trajectory")
 
         self.add_collision_objects()
 
@@ -290,7 +311,7 @@ class PickPlaceTask(Node):
 
     def wait_for_action(self, client: ActionClient, name: str) -> None:
         while not client.wait_for_server(timeout_sec=1.0):
-            self.get_logger().info(f"Waiting for Action server {name} to be available...")
+            self.get_logger().info(f"Waiting for Action server {name}...")
         self.get_logger().info(f"Action server {name} connected.")
 
     def run_stress_test(self, iterations: int) -> None:
@@ -442,7 +463,6 @@ class PickPlaceTask(Node):
         goal.planning_options.replan = False
 
         send_future = self.move_group_client.send_goal_async(goal)
-
         try:
             goal_handle = send_future.result(timeout=10.0)
         except Exception as exc:
@@ -561,7 +581,7 @@ class PickPlaceTask(Node):
 def main() -> None:
     rclpy.init()
     node = PickPlaceTask()
-    executor = rclpy.executors.SingleThreadedExecutor()
+    executor = MultiThreadedExecutor()
     executor.add_node(node)
     try:
         executor.spin()
