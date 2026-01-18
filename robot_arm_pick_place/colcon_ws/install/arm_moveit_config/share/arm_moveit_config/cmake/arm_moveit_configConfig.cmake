@@ -1,0 +1,1 @@
+/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_config/ament_cmake_core/arm_moveit_configConfig.cmake

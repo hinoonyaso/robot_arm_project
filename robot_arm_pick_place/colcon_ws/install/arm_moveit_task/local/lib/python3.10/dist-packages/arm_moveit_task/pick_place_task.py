@@ -1,0 +1,1 @@
+/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/src/arm_moveit_task/arm_moveit_task/pick_place_task.py

@@ -1,0 +1,12 @@
+/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_task/CMakeFiles/uninstall.dir
+/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_task/CMakeFiles/arm_moveit_task_uninstall.dir
+/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_task/CMakeFiles/ament_cmake_python_symlink_arm_moveit_task.dir
+/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_task/CMakeFiles/ament_cmake_python_symlink_arm_moveit_task_setup.dir
+/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_task/CMakeFiles/ament_cmake_python_build_arm_moveit_task_egg.dir
+/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_task/CMakeFiles/test.dir
+/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_task/CMakeFiles/edit_cache.dir
+/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_task/CMakeFiles/rebuild_cache.dir
+/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_task/CMakeFiles/list_install_components.dir
+/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_task/CMakeFiles/install.dir
+/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_task/CMakeFiles/install/local.dir
+/home/sang/dev_ws/robot_arm/robot_arm_project/robot_arm_pick_place/colcon_ws/build/arm_moveit_task/CMakeFiles/install/strip.dir

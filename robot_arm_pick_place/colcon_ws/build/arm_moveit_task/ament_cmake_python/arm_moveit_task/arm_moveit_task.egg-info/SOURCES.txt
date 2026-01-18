@@ -1,0 +1,8 @@
+setup.cfg
+setup.py
+arm_moveit_task/__init__.py
+arm_moveit_task/pick_place_task.py
+arm_moveit_task.egg-info/PKG-INFO
+arm_moveit_task.egg-info/SOURCES.txt
+arm_moveit_task.egg-info/dependency_links.txt
+arm_moveit_task.egg-info/top_level.txt
