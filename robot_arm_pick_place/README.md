@@ -155,6 +155,7 @@ iteration_id,stage_name,plan_success,exec_success,plan_time_ms,exec_time_ms,retr
   ```
 - **/spawn_entity 없음**: world 파일에 `gazebo_ros_factory` 플러그인이 있어야 `/spawn_entity` 서비스가 생성됩니다 (`arm_world.world`에 기본 포함).
 - **FastDDS SHM 에러 지속**: `/dev/shm`의 fastrtps 잠금 파일 정리 후 재시도하거나 `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`로 전환하세요.
+- **/move_group 액션 서버가 안 보임**: `ros2 action list`에 `/move_group`이 없으면 move_group이 꺼졌거나 discovery 실패일 수 있습니다. 먼저 `ros2 daemon stop` 후 `/dev/shm/fastrtps*`를 정리하고 다시 실행하세요. 그래도 해결되지 않으면 `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`로 전환해 재실행하고, 필요 시 `ros-humble-rmw-cyclonedds-cpp`를 설치해 확인하세요.
 
 ## 향후 확장
 - 비전 기반 픽(ArUco/Depth)으로 target pose 자동 추정
