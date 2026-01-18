@@ -93,6 +93,12 @@ ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true stress_test:=true
 2. 목표 포즈를 인터랙티브 마커로 이동한 뒤 **Plan** → **Execute**를 클릭합니다.
 3. 그리퍼는 `gripper` 그룹을 선택해 `Joint` 값을 조정 후 **Plan/Execute**로 제어합니다.
 
+### RViz에서 카메라 화면 보기
+1. RViz2 좌측 Displays에서 **Add**를 클릭합니다.
+2. `By topic` 또는 `By display type`에서 **Image**를 선택합니다.
+3. `Image` 디스플레이의 **Topic**을 `/camera/color/image_raw`로 설정합니다.
+4. 카메라 정보가 필요하면 **Add** → **Camera**를 추가한 뒤, `Camera`의 **Image Topic**을 동일하게 맞춥니다.
+
 ## 토픽/서비스/액션 표
 | 분류 | 이름 | 타입 | 설명 |
 |---|---|---|---|
