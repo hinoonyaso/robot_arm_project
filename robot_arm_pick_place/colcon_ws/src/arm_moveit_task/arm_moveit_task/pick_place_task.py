@@ -10,7 +10,6 @@ from typing import Dict, List, Optional, Tuple
 
 import rclpy
 from rclpy.action import ActionClient
-from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 from geometry_msgs.msg import Pose
 from gazebo_msgs.msg import EntityState
@@ -149,36 +148,20 @@ class PickPlaceTask(Node):
         self.arm_joint_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
         self.gripper_joint_names = ["finger_left_joint", "finger_right_joint"]
 
-        self.callback_group = ReentrantCallbackGroup()
-
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        self.move_group_client = ActionClient(
-            self, MoveGroup, "move_group", callback_group=self.callback_group
-        )
-        self.execute_client = ActionClient(
-            self, ExecuteTrajectory, "execute_trajectory", callback_group=self.callback_group
-        )
-        self.apply_scene_client = self.create_client(
-            ApplyPlanningScene, "/apply_planning_scene", callback_group=self.callback_group
-        )
+        self.move_group_client = ActionClient(self, MoveGroup, "/move_group")
+        self.execute_client = ActionClient(self, ExecuteTrajectory, "/execute_trajectory")
+        self.apply_scene_client = self.create_client(ApplyPlanningScene, "/apply_planning_scene")
 
-        self.attach_service = self.create_service(
-            Trigger, "/attach", self.handle_attach, callback_group=self.callback_group
-        )
-        self.detach_service = self.create_service(
-            Trigger, "/detach", self.handle_detach, callback_group=self.callback_group
-        )
+        self.attach_service = self.create_service(Trigger, "/attach", self.handle_attach)
+        self.detach_service = self.create_service(Trigger, "/detach", self.handle_detach)
 
-        self.entity_client = self.create_client(
-            SetEntityState, "/gazebo/set_entity_state", callback_group=self.callback_group
-        )
+        self.entity_client = self.create_client(SetEntityState, "/gazebo/set_entity_state")
         self.attach_active = False
         self.attached_entity = "object_box"
-        self.follow_timer = self.create_timer(
-            1.0 / 30.0, self.follow_object, callback_group=self.callback_group
-        )
+        self.follow_timer = self.create_timer(1.0 / 30.0, self.follow_object)
 
         self.metrics_logger = MetricsLogger(
             self,
@@ -287,9 +270,10 @@ class PickPlaceTask(Node):
             return False
 
     def task_loop(self) -> None:
+        self.get_logger().info("Task Thread Started. Waiting for system ready...")
         time.sleep(2.0)
-        self.wait_for_action(self.move_group_client, "move_group")
-        self.wait_for_action(self.execute_client, "execute_trajectory")
+        self.wait_for_action(self.move_group_client, "/move_group")
+        self.wait_for_action(self.execute_client, "/execute_trajectory")
 
         self.add_collision_objects()
 
@@ -305,17 +289,13 @@ class PickPlaceTask(Node):
             self.run_single_iteration(1)
 
     def wait_for_action(self, client: ActionClient, name: str) -> None:
-        while not client.wait_for_server(timeout_sec=5.0):
+        while not client.wait_for_server(timeout_sec=1.0):
             self.get_logger().info(f"Waiting for Action server {name} to be available...")
         self.get_logger().info(f"Action server {name} connected.")
 
     def run_stress_test(self, iterations: int) -> None:
         print_every = int(self.get_parameter("metrics.print_summary_every").get_parameter_value().integer_value)
-        sleep_between = (
-            self.get_parameter("stress_test.sleep_between_iterations_sec")
-            .get_parameter_value()
-            .double_value
-        )
+        sleep_between = self.get_parameter("stress_test.sleep_between_iterations_sec").get_parameter_value().double_value
         for iteration in range(1, iterations + 1):
             self.run_single_iteration(iteration)
             if iteration % print_every == 0:
@@ -349,7 +329,7 @@ class PickPlaceTask(Node):
 
         for name, func in stages:
             ret = self.run_with_retries(name, func)
-            if len(ret) == 4:
+            if isinstance(ret, tuple) and len(ret) == 4:
                 result, plan_time, exec_time, retries = ret
             else:
                 result = StageResult.SUCCESS if ret else StageResult.EXEC_FAIL
@@ -373,11 +353,7 @@ class PickPlaceTask(Node):
                 break
 
     def run_with_retries(self, stage_name: str, func) -> Tuple[StageResult, float, float, int]:
-        timeout = (
-            self.get_parameter("stress_test.per_stage_timeout_sec")
-            .get_parameter_value()
-            .double_value
-        )
+        timeout = self.get_parameter("stress_test.per_stage_timeout_sec").get_parameter_value().double_value
         max_retries = int(
             self.get_parameter("stress_test.max_retries_per_stage").get_parameter_value().integer_value
         )
@@ -585,7 +561,7 @@ class PickPlaceTask(Node):
 def main() -> None:
     rclpy.init()
     node = PickPlaceTask()
-    executor = rclpy.executors.MultiThreadedExecutor()
+    executor = rclpy.executors.SingleThreadedExecutor()
     executor.add_node(node)
     try:
         executor.spin()
