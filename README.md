@@ -112,3 +112,11 @@ If the arm only moves vertically:
 If perception does not publish:
 - Check `rqt_image_view` on `/overhead_camera/overhead_rgb/image_raw`.
 - Ensure `cv2` and `numpy<2` are installed in the ROS environment.
+
+## Trial Notes (What we ran into)
+
+- `color_detector` not found: fixed by installing Python nodes in `arm_moveit_task` so console scripts land in `lib/arm_moveit_task`.
+- RViz markers missing even though Gazebo shows objects: MoveIt/RViz setup can load, but interactive markers require proper MotionPlanning panel config; verify `Planning Group=arm`.
+- Color-cycle timing: shuffle boxes after a successful pick/place, not before; skip shuffle on failure.
+- "Succeeded" without actually grasping: MoveIt logs success for planning/execution; add attach checks to verify gripper/object proximity.
+- Planning failures like "Invalid goal state": box collision objects can block grasp targets; exclude box collision objects when perception mode is active.
