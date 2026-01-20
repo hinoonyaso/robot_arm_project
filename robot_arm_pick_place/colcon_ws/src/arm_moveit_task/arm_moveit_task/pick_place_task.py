@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import csv
 import os
+import random
 import threading
 import time
 from dataclasses import dataclass
@@ -9,13 +10,14 @@ from math import cos, sin
 from typing import Dict, List, Optional, Tuple
 
 import rclpy
+from ament_index_python.packages import get_package_share_directory
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from geometry_msgs.msg import Pose, PoseStamped
 from gazebo_msgs.msg import EntityState
-from gazebo_msgs.srv import SetEntityState
+from gazebo_msgs.srv import DeleteEntity, GetEntityState, SetEntityState, SpawnEntity
 from moveit_msgs.action import ExecuteTrajectory, MoveGroup
 from moveit_msgs.msg import (
     CollisionObject,
@@ -29,6 +31,8 @@ from moveit_msgs.msg import (
     RobotState,
 )
 from moveit_msgs.srv import ApplyPlanningScene
+from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+from rcl_interfaces.srv import SetParameters
 from shape_msgs.msg import SolidPrimitive
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener
@@ -142,18 +146,33 @@ class PickPlaceTask(Node):
         self.declare_parameter("perception.enabled", False)
         self.declare_parameter("perception.topic", "/detected_object_pose")
         self.declare_parameter("perception.timeout_sec", 1.0)
+        self.declare_parameter("perception.wait_timeout_sec", 3.0)
         self.declare_parameter("perception.use_detected_orientation", False)
+        self.declare_parameter(
+            "perception.grasp_candidate_offsets",
+            [0.0, 0.0, 0.0, 0.02, 0.0, 0.0, -0.02, 0.0, 0.0, 0.0, 0.02, 0.0, 0.0, -0.02, 0.0],
+        )
+        self.declare_parameter("perception.grasp_candidate_yaws", [0.0])
         self.declare_parameter("perception.pre_grasp_offset", [0.0, 0.0, 0.08])
-        self.declare_parameter("perception.grasp_offset", [0.0, 0.0, 0.02])
+        self.declare_parameter("perception.grasp_offset", [0.0, 0.0, -0.01])
         self.declare_parameter("perception.lift_offset", [0.0, 0.0, 0.16])
+        self.declare_parameter("perception.attach_distance_threshold", 0.05)
         self.declare_parameter("stress_test.enabled", False)
         self.declare_parameter("stress_test.iterations", 100)
         self.declare_parameter("stress_test.per_stage_timeout_sec", 12.0)
         self.declare_parameter("stress_test.max_retries_per_stage", 2)
         self.declare_parameter("stress_test.sleep_between_iterations_sec", 1.0)
+        self.declare_parameter("color_cycle.enabled", False)
+        self.declare_parameter("color_cycle.iterations", 10)
+        self.declare_parameter("color_cycle.sleep_between_iterations_sec", 1.0)
+        self.declare_parameter("color_cycle.colors", ["red", "blue", "black"])
         self.declare_parameter("metrics.log_csv", True)
         self.declare_parameter("metrics.csv_path", "/tmp/arm_pick_place_metrics.csv")
         self.declare_parameter("metrics.print_summary_every", 10)
+        self.declare_parameter("planning.num_attempts", 1)
+        self.declare_parameter("planning.allowed_time", 2.5)
+        self.declare_parameter("planning.goal_timeout_sec", 4.0)
+        self.declare_parameter("planning.result_timeout_sec", 4.0)
 
         self.ee_link = "tool0"
         self.planning_frame = "world"
@@ -169,6 +188,9 @@ class PickPlaceTask(Node):
         self.move_group_client = ActionClient(self, MoveGroup, "move_action", callback_group=self.callback_group)
         self.execute_client = ActionClient(self, ExecuteTrajectory, "execute_trajectory", callback_group=self.callback_group)
         self.apply_scene_client = self.create_client(ApplyPlanningScene, "apply_planning_scene", callback_group=self.callback_group)
+        self.perception_param_client = self.create_client(
+            SetParameters, "/arm_perception_node/set_parameters", callback_group=self.callback_group
+        )
 
         self.attach_service = self.create_service(Trigger, "/attach", self.handle_attach, callback_group=self.callback_group)
         self.detach_service = self.create_service(Trigger, "/detach", self.handle_detach, callback_group=self.callback_group)
@@ -184,9 +206,18 @@ class PickPlaceTask(Node):
         )
 
         self.entity_client = self.create_client(SetEntityState, "/set_entity_state", callback_group=self.callback_group)
+        self.get_entity_client = self.create_client(GetEntityState, "/get_entity_state", callback_group=self.callback_group)
+        self.spawn_entity_client = self.create_client(SpawnEntity, "/spawn_entity", callback_group=self.callback_group)
+        self.delete_entity_client = self.create_client(DeleteEntity, "/delete_entity", callback_group=self.callback_group)
         self.attach_active = False
-        self.attached_entity = "object_box"
-        
+        self.attached_entity = "object_box_red"
+        self.box_slots = [
+            ("object_box_red", (0.55, 0.12, 0.72)),
+            ("object_box_blue", (0.55, 0.0, 0.72)),
+            ("object_box_black", (0.55, -0.12, 0.72)),
+        ]
+        self.box_models = self.load_box_models()
+
         self.follow_timer = self.create_timer(1.0 / 30.0, self.follow_object, callback_group=self.callback_group)
 
         self.metrics_logger = MetricsLogger(
@@ -197,6 +228,20 @@ class PickPlaceTask(Node):
 
         self.task_thread = threading.Thread(target=self.task_loop, daemon=True)
         self.task_thread.start()
+
+    def load_box_models(self) -> Dict[str, str]:
+        gazebo_share = get_package_share_directory("arm_gazebo")
+        models: Dict[str, str] = {}
+        for color in ["red", "blue", "black"]:
+            model_path = os.path.join(gazebo_share, "models", f"object_box_{color}", "model.sdf")
+            try:
+                with open(model_path, "r", encoding="utf-8") as handle:
+                    models[color] = handle.read()
+            except OSError as exc:
+                self.get_logger().warning(f"Failed to load model for {color}: {exc}")
+        return models
+
+        
 
     def handle_detected_pose(self, msg: PoseStamped) -> None:
         self.detected_pose = msg
@@ -252,29 +297,56 @@ class PickPlaceTask(Node):
         table.primitives = [table_primitive]
         table.primitive_poses = [table_pose]
 
-        box = CollisionObject()
-        box.id = "object_box"
-        box.header.frame_id = self.planning_frame
-        box.operation = CollisionObject.ADD
-        box_primitive = SolidPrimitive()
-        box_primitive.type = SolidPrimitive.BOX
-        box_primitive.dimensions = [0.04, 0.04, 0.04]
-        box_pose = Pose()
-        box_pose.position.x = 0.55
-        box_pose.position.y = 0.0
-        box_pose.position.z = 0.72
-        box_pose.orientation.w = 1.0
-        box.primitives = [box_primitive]
-        box.primitive_poses = [box_pose]
-
         request = ApplyPlanningScene.Request()
         request.scene.is_diff = True
-        request.scene.world.collision_objects = [table, box]
+        request.scene.world.collision_objects = [table]
+
+        if not self.get_parameter("perception.enabled").get_parameter_value().bool_value:
+            box_primitive = SolidPrimitive()
+            box_primitive.type = SolidPrimitive.BOX
+            box_primitive.dimensions = [0.04, 0.04, 0.04]
+
+            red_box = CollisionObject()
+            red_box.id = "object_box_red"
+            red_box.header.frame_id = self.planning_frame
+            red_box.operation = CollisionObject.ADD
+            red_pose = Pose()
+            red_pose.position.x = 0.55
+            red_pose.position.y = 0.12
+            red_pose.position.z = 0.72
+            red_pose.orientation.w = 1.0
+            red_box.primitives = [box_primitive]
+            red_box.primitive_poses = [red_pose]
+
+            blue_box = CollisionObject()
+            blue_box.id = "object_box_blue"
+            blue_box.header.frame_id = self.planning_frame
+            blue_box.operation = CollisionObject.ADD
+            blue_pose = Pose()
+            blue_pose.position.x = 0.55
+            blue_pose.position.y = 0.0
+            blue_pose.position.z = 0.72
+            blue_pose.orientation.w = 1.0
+            blue_box.primitives = [box_primitive]
+            blue_box.primitive_poses = [blue_pose]
+
+            black_box = CollisionObject()
+            black_box.id = "object_box_black"
+            black_box.header.frame_id = self.planning_frame
+            black_box.operation = CollisionObject.ADD
+            black_pose = Pose()
+            black_pose.position.x = 0.55
+            black_pose.position.y = -0.12
+            black_pose.position.z = 0.72
+            black_pose.orientation.w = 1.0
+            black_box.primitives = [box_primitive]
+            black_box.primitive_poses = [black_pose]
+
+            request.scene.world.collision_objects.extend([red_box, blue_box, black_box])
         
         future = self.apply_scene_client.call_async(request)
         try:
-            rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
-            if not future.done():
+            if not self.wait_for_future(future, timeout_sec=2.0):
                 raise TimeoutError("apply_planning_scene timeout")
             _ = future.result()
             self.get_logger().info("Collision objects added.")
@@ -295,22 +367,24 @@ class PickPlaceTask(Node):
                 self.get_logger().warning("/set_entity_state service not available")
                 return False
             self.get_logger().warning("Service listed but not ready; attempting call anyway.")
-        state = EntityState()
-        state.name = self.attached_entity
-        state.pose.position.x = 0.55
-        state.pose.position.y = 0.0
-        state.pose.position.z = 0.72
-        state.pose.orientation.w = 1.0
-        
-        future = self.entity_client.call_async(SetEntityState.Request(state=state))
-        try:
-            rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
-            if not future.done():
-                return False
-            res = future.result()
-            return res is not None and res.success
-        except Exception:
-            return False
+        success = True
+        for name, position in self.box_slots:
+            state = EntityState()
+            state.name = name
+            state.pose.position.x = position[0]
+            state.pose.position.y = position[1]
+            state.pose.position.z = position[2]
+            state.pose.orientation.w = 1.0
+            future = self.entity_client.call_async(SetEntityState.Request(state=state))
+            try:
+                if not self.wait_for_future(future, timeout_sec=2.0):
+                    success = False
+                    continue
+                res = future.result()
+                success = success and res is not None and res.success
+            except Exception:
+                success = False
+        return success
 
     def task_loop(self) -> None:
         self.get_logger().info("Task Thread Started. Waiting for system initialization...")
@@ -348,7 +422,11 @@ class PickPlaceTask(Node):
 
         stress_enabled = self.get_parameter("stress_test.enabled").get_parameter_value().bool_value
         iterations = int(self.get_parameter("stress_test.iterations").get_parameter_value().integer_value)
-        if stress_enabled:
+        color_cycle_enabled = self.get_parameter("color_cycle.enabled").get_parameter_value().bool_value
+        if color_cycle_enabled:
+            cycle_iterations = int(self.get_parameter("color_cycle.iterations").get_parameter_value().integer_value)
+            self.run_color_cycle(cycle_iterations)
+        elif stress_enabled:
             self.run_stress_test(iterations)
         else:
             self.run_single_iteration(1)
@@ -358,6 +436,13 @@ class PickPlaceTask(Node):
         while not client.wait_for_server(timeout_sec=2.0):
             self.get_logger().warn(f"Action server '{name}' not available yet. Retrying...")
         self.get_logger().info(f"Action server '{name}' connected!")
+
+    @staticmethod
+    def wait_for_future(future, timeout_sec: float) -> bool:
+        deadline = time.monotonic() + timeout_sec
+        while rclpy.ok() and not future.done() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return future.done()
 
     def run_stress_test(self, iterations: int) -> None:
         print_every = int(self.get_parameter("metrics.print_summary_every").get_parameter_value().integer_value)
@@ -377,30 +462,190 @@ class PickPlaceTask(Node):
             f"Plan avg {summary['plan_avg_ms']:.1f} ms | Exec avg {summary['exec_avg_ms']:.1f} ms"
         )
 
-    def run_single_iteration(self, iteration_id: int) -> None:
-        stages = [
-            ("home", self.move_home),
-            ("reset_object", self.reset_object_pose),
-            ("pre_grasp", lambda: self.plan_pose_stage("pre_grasp_pose")),
-            ("grasp", lambda: self.plan_pose_stage("grasp_pose")),
-            ("close_gripper", self.close_gripper),
-            ("attach", self.attach_object),
-            ("lift", lambda: self.plan_pose_stage("lift_pose")),
-            ("pre_place", lambda: self.plan_pose_stage("pre_place_pose")),
-            ("place", lambda: self.plan_pose_stage("place_pose")),
-            ("open_gripper", self.open_gripper),
-            ("detach", self.detach_object),
-            ("retreat", lambda: self.plan_pose_stage("retreat_pose")),
-        ]
+    def run_color_cycle(self, iterations: int) -> None:
+        sleep_between = self.get_parameter("color_cycle.sleep_between_iterations_sec").get_parameter_value().double_value
+        colors = list(self.get_parameter("color_cycle.colors").get_parameter_value().string_array_value)
+        if not colors:
+            self.get_logger().warning("color_cycle.colors is empty; skipping.")
+            return
 
+        for iteration in range(1, iterations + 1):
+            self.get_logger().info(f"Color cycle iteration {iteration}/{iterations}: target=red")
+            success = self.run_single_iteration(iteration)
+            if not success:
+                self.get_logger().warning("Color cycle iteration failed; skipping color shuffle.")
+                self.recover_after_failure()
+                time.sleep(sleep_between)
+                continue
+
+            self.move_home()
+            self.reset_object_pose()
+
+            if iteration >= iterations:
+                time.sleep(sleep_between)
+                continue
+
+            if len(colors) >= len(self.box_slots):
+                slot_colors = random.sample(colors, k=len(self.box_slots))
+            else:
+                slot_colors = list(colors)
+                slot_colors.extend(random.choices(colors, k=len(self.box_slots) - len(slot_colors)))
+            if "red" not in slot_colors:
+                self.get_logger().warning("color_cycle.colors does not include red; forcing target to red.")
+                slot_colors[0] = "red"
+
+            red_entity = self.respawn_boxes(slot_colors)
+            if red_entity is None:
+                self.get_logger().warning("Failed to respawn boxes for color cycle.")
+            else:
+                self.attached_entity = red_entity
+                if not self.set_target_color("red", update_entity=False):
+                    self.get_logger().warning("Failed to set perception color to red.")
+            time.sleep(sleep_between)
+
+    def run_single_iteration(self, iteration_id: int) -> bool:
+        if self.get_parameter("perception.enabled").get_parameter_value().bool_value:
+            if self.wait_for_detected_pose() is None:
+                self.get_logger().warning(
+                    "Perception enabled but no detected pose available; skipping motion."
+                )
+                return False
+            candidates = self.build_grasp_candidates()
+            if not candidates:
+                self.get_logger().warning("Perception enabled but failed to build grasp candidates.")
+                return False
+            for index, grasp_target in enumerate(candidates, start=1):
+                stages = [
+                    (f"cand{index}_grasp", lambda: self.plan_pose(grasp_target)),
+                    (f"cand{index}_close_gripper", self.close_gripper),
+                    (f"cand{index}_attach", self.attach_object),
+                    (f"cand{index}_pre_place", lambda: self.plan_pose_stage("pre_place_pose")),
+                    (f"cand{index}_place", lambda: self.plan_pose_stage("place_pose")),
+                    (f"cand{index}_open_gripper", self.open_gripper),
+                    (f"cand{index}_detach", self.detach_object),
+                ]
+
+                if self.run_stage_sequence(iteration_id, stages):
+                    return True
+            self.get_logger().warning("All grasp candidates failed.")
+            return False
+        else:
+            stages = [
+                ("home", self.move_home),
+                ("reset_object", self.reset_object_pose),
+                ("grasp", lambda: self.plan_pose_stage("grasp_pose")),
+                ("close_gripper", self.close_gripper),
+                ("attach", self.attach_object),
+                ("pre_place", lambda: self.plan_pose_stage("pre_place_pose")),
+                ("place", lambda: self.plan_pose_stage("place_pose")),
+                ("open_gripper", self.open_gripper),
+                ("detach", self.detach_object),
+                ("retreat", lambda: self.plan_pose_stage("retreat_pose")),
+            ]
+
+        return self.run_stage_sequence(iteration_id, stages)
+
+    def set_target_color(self, color: str, update_entity: bool = True) -> bool:
+        color = color.lower()
+        hsv_config = self.get_hsv_config(color)
+        if hsv_config is None:
+            self.get_logger().warning(f"Unsupported target color '{color}'.")
+            return False
+
+        if update_entity:
+            self.attached_entity = f"object_box_{color}"
+        if not self.perception_param_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warning("Perception parameter service not available.")
+            return False
+
+        params = []
+        for name, values in hsv_config.items():
+            param = Parameter()
+            param.name = name
+            param.value = ParameterValue(type=ParameterType.PARAMETER_INTEGER_ARRAY, integer_array_value=values)
+            params.append(param)
+
+        future = self.perception_param_client.call_async(SetParameters.Request(parameters=params))
+        if not self.wait_for_future(future, timeout_sec=2.0):
+            return False
+        response = future.result()
+        if response is None:
+            return False
+        return all(result.successful for result in response.results)
+
+    def respawn_boxes(self, slot_colors: List[str]) -> Optional[str]:
+        if len(slot_colors) != len(self.box_slots):
+            self.get_logger().warning("slot_colors length mismatch.")
+            return None
+        if not self.spawn_entity_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warning("/spawn_entity service not available.")
+            return None
+        if not self.delete_entity_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warning("/delete_entity service not available.")
+            return None
+
+        for name, _ in self.box_slots:
+            future = self.delete_entity_client.call_async(DeleteEntity.Request(name=name))
+            self.wait_for_future(future, timeout_sec=2.0)
+
+        red_entity = None
+        for (name, position), color in zip(self.box_slots, slot_colors):
+            model_xml = self.box_models.get(color)
+            if not model_xml:
+                self.get_logger().warning(f"Missing model XML for color '{color}'.")
+                return None
+            pose = Pose()
+            pose.position.x = position[0]
+            pose.position.y = position[1]
+            pose.position.z = position[2]
+            pose.orientation.w = 1.0
+            request = SpawnEntity.Request()
+            request.name = name
+            request.xml = model_xml
+            request.initial_pose = pose
+            request.reference_frame = "world"
+            future = self.spawn_entity_client.call_async(request)
+            if not self.wait_for_future(future, timeout_sec=3.0):
+                self.get_logger().warning(f"Spawn timed out for {name}.")
+                return None
+            if color == "red":
+                red_entity = name
+        return red_entity
+
+    @staticmethod
+    def get_hsv_config(color: str) -> Optional[dict]:
+        if color == "red":
+            return {
+                "red_hsv_lower1": [0, 120, 70],
+                "red_hsv_upper1": [10, 255, 255],
+                "red_hsv_lower2": [170, 120, 70],
+                "red_hsv_upper2": [180, 255, 255],
+            }
+        if color == "blue":
+            return {
+                "red_hsv_lower1": [100, 120, 50],
+                "red_hsv_upper1": [130, 255, 255],
+                "red_hsv_lower2": [100, 120, 50],
+                "red_hsv_upper2": [130, 255, 255],
+            }
+        if color == "black":
+            return {
+                "red_hsv_lower1": [0, 0, 0],
+                "red_hsv_upper1": [180, 255, 50],
+                "red_hsv_lower2": [0, 0, 0],
+                "red_hsv_upper2": [180, 255, 50],
+            }
+        return None
+
+    def run_stage_sequence(self, iteration_id: int, stages: List[Tuple[str, callable]]) -> bool:
         for name, func in stages:
             ret = self.run_with_retries(name, func)
             if isinstance(ret, tuple) and len(ret) == 4:
                 result, plan_time, exec_time, retries = ret
-            else: 
+            else:
                 result = StageResult.SUCCESS if ret else StageResult.EXEC_FAIL
                 plan_time, exec_time, retries = 0.0, 0.0, 0
-                
+
             self.metrics_logger.log(
                 MetricsRow(
                     iteration_id=iteration_id,
@@ -416,7 +661,8 @@ class PickPlaceTask(Node):
             )
             if result != StageResult.SUCCESS:
                 self.get_logger().warning(f"Iteration {iteration_id} stage {name} failed: {result.value}")
-                break
+                return False
+        return True
 
     def run_with_retries(self, stage_name: str, func) -> Tuple[StageResult, float, float, int]:
         timeout = self.get_parameter("stress_test.per_stage_timeout_sec").get_parameter_value().double_value
@@ -452,6 +698,9 @@ class PickPlaceTask(Node):
 
     def plan_pose_stage(self, param_name: str) -> Tuple[StageResult, float, float]:
         pose = self.build_target_pose(param_name)
+        return self.plan_pose(pose)
+
+    def plan_pose(self, pose: Pose) -> Tuple[StageResult, float, float]:
         constraints = self.pose_constraints(pose)
         return self.plan_and_execute("arm", constraints)
 
@@ -462,7 +711,42 @@ class PickPlaceTask(Node):
         return self.plan_joint_stage("gripper", self.gripper_joint_names, [0.04, 0.04])
 
     def attach_object(self) -> Tuple[StageResult, float, float]:
+        if self.get_parameter("perception.enabled").get_parameter_value().bool_value:
+            target_pose = self.build_target_pose("grasp_pose")
+            current_pose = self.get_current_ee_pose()
+            if current_pose is None:
+                self.get_logger().warning("Attach failed: missing end-effector pose.")
+                return StageResult.ATTACH_FAIL, 0.0, 0.0
+            threshold = self.get_parameter("perception.attach_distance_threshold").get_parameter_value().double_value
+            dx = target_pose.position.x - current_pose.position.x
+            dy = target_pose.position.y - current_pose.position.y
+            dz = target_pose.position.z - current_pose.position.z
+            distance = (dx * dx + dy * dy + dz * dz) ** 0.5
+            if distance > threshold:
+                self.get_logger().warning(
+                    f"Attach failed: end-effector too far from target (dist={distance:.3f} > {threshold:.3f})."
+                )
+                return StageResult.ATTACH_FAIL, 0.0, 0.0
+            entity_pose = self.get_entity_pose(self.attached_entity)
+            if entity_pose is not None:
+                ex = entity_pose.position.x - current_pose.position.x
+                ey = entity_pose.position.y - current_pose.position.y
+                ez = entity_pose.position.z - current_pose.position.z
+                entity_distance = (ex * ex + ey * ey + ez * ez) ** 0.5
+                if entity_distance > threshold:
+                    self.get_logger().warning(
+                        f"Attach failed: object too far from gripper (dist={entity_distance:.3f} > {threshold:.3f})."
+                    )
+                    return StageResult.ATTACH_FAIL, 0.0, 0.0
+            else:
+                self.get_logger().warning("Attach failed: unable to read object pose from Gazebo.")
+                return StageResult.ATTACH_FAIL, 0.0, 0.0
         self.attach_active = True
+        if self.get_parameter("perception.enabled").get_parameter_value().bool_value:
+            self.follow_object()
+            if not self.verify_attached():
+                self.attach_active = False
+                return StageResult.ATTACH_FAIL, 0.0, 0.0
         return StageResult.SUCCESS, 0.0, 0.0
 
     def detach_object(self) -> Tuple[StageResult, float, float]:
@@ -495,8 +779,10 @@ class PickPlaceTask(Node):
         goal.request.group_name = group_name
         goal.request.goal_constraints = [constraints]
         goal.request.start_state = RobotState(is_diff=True)
-        goal.request.num_planning_attempts = 3
-        goal.request.allowed_planning_time = 5.0
+        attempts = int(self.get_parameter("planning.num_attempts").get_parameter_value().integer_value)
+        allowed_time = self.get_parameter("planning.allowed_time").get_parameter_value().double_value
+        goal.request.num_planning_attempts = max(1, attempts)
+        goal.request.allowed_planning_time = max(0.1, allowed_time)
         goal.request.max_velocity_scaling_factor = 0.5
         goal.request.max_acceleration_scaling_factor = 0.5
         goal.planning_options = PlanningOptions()
@@ -506,8 +792,8 @@ class PickPlaceTask(Node):
 
         send_future = self.move_group_client.send_goal_async(goal)
         try:
-            rclpy.spin_until_future_complete(self, send_future, timeout_sec=10.0)
-            if not send_future.done():
+            goal_timeout = self.get_parameter("planning.goal_timeout_sec").get_parameter_value().double_value
+            if not self.wait_for_future(send_future, timeout_sec=goal_timeout):
                 raise TimeoutError("move_action goal timeout")
             goal_handle = send_future.result()
         except Exception as e:
@@ -520,8 +806,8 @@ class PickPlaceTask(Node):
         
         result_future = goal_handle.get_result_async()
         try:
-            rclpy.spin_until_future_complete(self, result_future, timeout_sec=10.0)
-            if not result_future.done():
+            result_timeout = self.get_parameter("planning.result_timeout_sec").get_parameter_value().double_value
+            if not self.wait_for_future(result_future, timeout_sec=result_timeout):
                 raise TimeoutError("move_action result timeout")
             res = result_future.result()
         except Exception as e:
@@ -539,8 +825,7 @@ class PickPlaceTask(Node):
         goal.trajectory = trajectory
         send_future = self.execute_client.send_goal_async(goal)
         try:
-            rclpy.spin_until_future_complete(self, send_future, timeout_sec=5.0)
-            if not send_future.done():
+            if not self.wait_for_future(send_future, timeout_sec=5.0):
                 return False
             goal_handle = send_future.result()
         except Exception:
@@ -551,8 +836,7 @@ class PickPlaceTask(Node):
         
         result_future = goal_handle.get_result_async()
         try:
-            rclpy.spin_until_future_complete(self, result_future, timeout_sec=20.0)
-            if not result_future.done():
+            if not self.wait_for_future(result_future, timeout_sec=20.0):
                 return False
             res = result_future.result()
         except Exception:
@@ -610,6 +894,41 @@ class PickPlaceTask(Node):
             target_pose.orientation = default_pose.orientation
         return target_pose
 
+    def build_grasp_candidates(self) -> List[Pose]:
+        detected_pose = self.get_fresh_detected_pose()
+        if detected_pose is None:
+            return []
+
+        default_values = self.get_parameter("grasp_pose").get_parameter_value().double_array_value
+        base_roll, base_pitch, base_yaw = default_values[3], default_values[4], default_values[5]
+        base_orientation = self.quaternion_from_rpy(base_roll, base_pitch, base_yaw)
+
+        offsets = self.get_parameter("perception.grasp_candidate_offsets").get_parameter_value().double_array_value
+        yaw_offsets = self.get_parameter("perception.grasp_candidate_yaws").get_parameter_value().double_array_value
+        if len(offsets) % 3 != 0:
+            self.get_logger().warning("perception.grasp_candidate_offsets length is not a multiple of 3.")
+            return []
+
+        use_detected_orientation = self.get_parameter(
+            "perception.use_detected_orientation"
+        ).get_parameter_value().bool_value
+
+        candidates: List[Pose] = []
+        for idx in range(0, len(offsets), 3):
+            dx, dy, dz = offsets[idx], offsets[idx + 1], offsets[idx + 2]
+            for yaw_delta in yaw_offsets:
+                pose = Pose()
+                pose.position.x = detected_pose.position.x + dx
+                pose.position.y = detected_pose.position.y + dy
+                pose.position.z = detected_pose.position.z + dz
+                if use_detected_orientation:
+                    pose.orientation = detected_pose.orientation
+                else:
+                    yaw = base_yaw + yaw_delta
+                    pose.orientation = self.quaternion_from_rpy(base_roll, base_pitch, yaw)
+                candidates.append(pose)
+        return candidates
+
     def get_fresh_detected_pose(self) -> Optional[Pose]:
         if self.detected_pose is None:
             return None
@@ -620,6 +939,69 @@ class PickPlaceTask(Node):
         if (now - stamp).nanoseconds > int(timeout_sec * 1e9):
             return None
         return self.detected_pose.pose
+
+    def get_current_ee_pose(self) -> Optional[Pose]:
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.planning_frame,
+                self.ee_link,
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.2),
+            )
+        except Exception:
+            return None
+        pose = Pose()
+        pose.position.x = transform.transform.translation.x
+        pose.position.y = transform.transform.translation.y
+        pose.position.z = transform.transform.translation.z
+        pose.orientation = transform.transform.rotation
+        return pose
+
+    def get_entity_pose(self, name: str) -> Optional[Pose]:
+        if not self.get_entity_client.wait_for_service(timeout_sec=0.5):
+            return None
+        request = GetEntityState.Request()
+        request.name = name
+        future = self.get_entity_client.call_async(request)
+        if not self.wait_for_future(future, timeout_sec=1.0):
+            return None
+        response = future.result()
+        if response is None or not response.success:
+            return None
+        return response.state.pose
+
+    def verify_attached(self) -> bool:
+        current_pose = self.get_current_ee_pose()
+        if current_pose is None:
+            return False
+        entity_pose = self.get_entity_pose(self.attached_entity)
+        if entity_pose is None:
+            return False
+        offset = self.get_parameter("ee_to_object_offset").get_parameter_value().double_array_value
+        expected_x = current_pose.position.x + offset[0]
+        expected_y = current_pose.position.y + offset[1]
+        expected_z = current_pose.position.z + offset[2]
+        dx = entity_pose.position.x - expected_x
+        dy = entity_pose.position.y - expected_y
+        dz = entity_pose.position.z - expected_z
+        threshold = self.get_parameter("perception.attach_distance_threshold").get_parameter_value().double_value
+        return (dx * dx + dy * dy + dz * dz) ** 0.5 <= threshold
+
+    def wait_for_detected_pose(self) -> Optional[Pose]:
+        timeout = self.get_parameter("perception.wait_timeout_sec").get_parameter_value().double_value
+        deadline = time.monotonic() + max(0.1, timeout)
+        while time.monotonic() < deadline:
+            pose = self.get_fresh_detected_pose()
+            if pose is not None:
+                return pose
+            time.sleep(0.05)
+        return None
+
+    def recover_after_failure(self) -> None:
+        self.detach_object()
+        self.open_gripper()
+        self.move_home()
+        self.reset_object_pose()
 
     @staticmethod
     def joint_constraints(joint_names: List[str], positions: List[float]) -> Constraints:

@@ -19,6 +19,10 @@ setup(
     entry_points={
         "console_scripts": [
             "pick_place_task = arm_moveit_task.pick_place_task:main",
+            "perception_node = arm_moveit_task.perception_node:main",
+            "color_detector = arm_moveit_task.color_detector_node:main",
+            "pose_estimator = arm_moveit_task.pose_estimator_node:main",
+            "grasp_candidates = arm_moveit_task.grasp_candidate_node:main",
         ],
     },
 )

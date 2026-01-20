@@ -82,6 +82,18 @@ source install/setup.bash
 ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true stress_test:=false
 ```
 
+- Perception 파이프라인(분리 노드) 사용:
+```bash
+source install/setup.bash
+ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true enable_perception:=true use_legacy_perception:=false
+```
+
+- 기존 단일 perception 노드 사용:
+```bash
+source install/setup.bash
+ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true enable_perception:=true use_legacy_perception:=true
+```
+
 - 100회 스트레스 테스트:
 ```bash
 source install/setup.bash
@@ -102,6 +114,9 @@ ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true stress_test:=true
 | Service | /set_entity_state | gazebo_msgs/SetEntityState | 오브젝트 위치 갱신 |
 | Action | /arm_controller/follow_joint_trajectory | control_msgs/FollowJointTrajectory | 6DoF 제어 |
 | Action | /gripper_controller/follow_joint_trajectory | control_msgs/FollowJointTrajectory | 그리퍼 제어 |
+| Topic | /detected_object_centroid | geometry_msgs/PointStamped | 검출된 픽셀 중심점 |
+| Topic | /detected_object_pose | geometry_msgs/PoseStamped | 추정된 물체 포즈(world) |
+| Topic | /grasp_candidates | geometry_msgs/PoseArray | 그립 후보(디버그용) |
 
 ## 상태머신(단계별 성공/실패/재시도)
 | 단계 | 설명 | 성공 조건 | 실패/재시도 |

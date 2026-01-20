@@ -17,8 +17,12 @@ Visualization Manager:
     - Class: moveit_rviz_plugin/MotionPlanning
       Enabled: true
       Name: MotionPlanning
+      Planning Scene Topic: /monitored_planning_scene
       Robot Description: robot_description
       Move Group Namespace: ""
+      Planning Group: arm
+      Planning Pipeline: ompl
+      Planner Id: ""
   Global Options:
     Fixed Frame: base_link
   Name: root

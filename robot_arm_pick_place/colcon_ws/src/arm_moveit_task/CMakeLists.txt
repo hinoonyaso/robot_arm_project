@@ -18,6 +18,24 @@ install(PROGRAMS
   RENAME perception_node
 )
 
+install(PROGRAMS
+  arm_moveit_task/color_detector_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME color_detector
+)
+
+install(PROGRAMS
+  arm_moveit_task/pose_estimator_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME pose_estimator
+)
+
+install(PROGRAMS
+  arm_moveit_task/grasp_candidate_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME grasp_candidates
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()

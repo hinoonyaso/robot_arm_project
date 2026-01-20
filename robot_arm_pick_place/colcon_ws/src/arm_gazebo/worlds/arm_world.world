@@ -11,6 +11,7 @@
       <uri>model://ground_plane</uri>
     </include>
 
+
     <model name="table">
       <static>true</static>
       <pose>0.5 0 0.35 0 0 0</pose>
@@ -33,6 +34,67 @@
             <diffuse>0.6 0.4 0.2 1</diffuse>
           </material>
         </visual>
+      </link>
+    </model>
+
+    <model name="overhead_camera_rig">
+      <static>true</static>
+      <pose>0.5 0 1.15 0 1.5708 0</pose>
+      <link name="link">
+        <sensor name="overhead_rgb_camera" type="camera">
+          <update_rate>30</update_rate>
+          <camera>
+            <horizontal_fov>1.2</horizontal_fov>
+            <image>
+              <width>800</width>
+              <height>600</height>
+              <format>R8G8B8</format>
+            </image>
+            <clip>
+              <near>0.1</near>
+              <far>20.0</far>
+            </clip>
+          </camera>
+          <plugin name="gazebo_ros_overhead_rgb_camera" filename="libgazebo_ros_camera.so">
+            <ros>
+              <namespace>/overhead_camera</namespace>
+            </ros>
+            <camera_name>overhead_rgb</camera_name>
+            <image_topic_name>image_raw</image_topic_name>
+            <camera_info_topic_name>camera_info</camera_info_topic_name>
+            <frame_name>overhead_camera_link</frame_name>
+          </plugin>
+        </sensor>
+
+        <sensor name="overhead_depth_camera" type="depth">
+          <update_rate>30</update_rate>
+          <camera>
+            <horizontal_fov>1.2</horizontal_fov>
+            <image>
+              <width>800</width>
+              <height>600</height>
+              <format>R8G8B8</format>
+            </image>
+            <clip>
+              <near>0.1</near>
+              <far>20.0</far>
+            </clip>
+          </camera>
+          <depth>
+            <format>FLOAT32</format>
+            <near>0.1</near>
+            <far>20.0</far>
+          </depth>
+          <plugin name="gazebo_ros_overhead_depth_camera" filename="libgazebo_ros_camera.so">
+            <ros>
+              <namespace>/overhead_camera</namespace>
+            </ros>
+            <camera_name>overhead</camera_name>
+            <image_topic_name>image_raw</image_topic_name>
+            <camera_info_topic_name>camera_info</camera_info_topic_name>
+            <frame_name>overhead_camera_link</frame_name>
+          </plugin>
+        </sensor>
       </link>
     </model>
   </world>

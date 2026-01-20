@@ -1,40 +1,32 @@
 #!/usr/bin/env python3
-from collections import deque
-from typing import Deque, Optional, Tuple
+from typing import Optional, Tuple
 
-import cv2
 import numpy as np
 import rclpy
 from cv_bridge import CvBridge
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, PointStamped
 from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image
 from tf2_geometry_msgs import do_transform_pose
 from tf2_ros import Buffer, TransformException, TransformListener
 
 
-class ColorDepthPerception(Node):
+class PoseEstimatorNode(Node):
     def __init__(self) -> None:
-        super().__init__("arm_perception_node")
+        super().__init__("arm_pose_estimator")
 
-        self.declare_parameter("color_topic", "/overhead_camera/overhead_rgb/image_raw")
+        self.declare_parameter("centroid_topic", "/detected_object_centroid")
         self.declare_parameter("depth_topic", "/overhead_camera/overhead/depth/image_raw")
         self.declare_parameter("camera_info_topic", "/overhead_camera/overhead_rgb/camera_info")
         self.declare_parameter("camera_frame", "")
         self.declare_parameter("target_frame", "world")
         self.declare_parameter("publish_topic", "/detected_object_pose")
-        self.declare_parameter("min_area", 150.0)
         self.declare_parameter("depth_window", 3)
         self.declare_parameter("max_depth_m", 2.0)
-        self.declare_parameter("red_hsv_lower1", [0, 120, 70])
-        self.declare_parameter("red_hsv_upper1", [10, 255, 255])
-        self.declare_parameter("red_hsv_lower2", [170, 120, 70])
-        self.declare_parameter("red_hsv_upper2", [180, 255, 255])
 
         self.bridge = CvBridge()
         self.camera_info: Optional[CameraInfo] = None
         self.latest_depth: Optional[Image] = None
-        self.depth_queue: Deque[Image] = deque(maxlen=1)
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -42,39 +34,28 @@ class ColorDepthPerception(Node):
         publish_topic = self.get_parameter("publish_topic").get_parameter_value().string_value
         self.publisher = self.create_publisher(PoseStamped, publish_topic, 10)
 
-        color_topic = self.get_parameter("color_topic").get_parameter_value().string_value
+        centroid_topic = self.get_parameter("centroid_topic").get_parameter_value().string_value
         depth_topic = self.get_parameter("depth_topic").get_parameter_value().string_value
         camera_info_topic = self.get_parameter("camera_info_topic").get_parameter_value().string_value
 
-        self.create_subscription(Image, color_topic, self.handle_color_image, 10)
+        self.create_subscription(PointStamped, centroid_topic, self.handle_centroid, 10)
         self.create_subscription(Image, depth_topic, self.handle_depth_image, 10)
         self.create_subscription(CameraInfo, camera_info_topic, self.handle_camera_info, 10)
 
-        self.get_logger().info("Perception node started.")
+        self.get_logger().info("Pose estimator node started.")
 
     def handle_camera_info(self, msg: CameraInfo) -> None:
         self.camera_info = msg
 
     def handle_depth_image(self, msg: Image) -> None:
         self.latest_depth = msg
-        self.depth_queue.append(msg)
 
-    def handle_color_image(self, msg: Image) -> None:
-        if self.camera_info is None or not self.depth_queue:
+    def handle_centroid(self, msg: PointStamped) -> None:
+        if self.camera_info is None or self.latest_depth is None:
             return
 
-        try:
-            bgr = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-        except Exception as exc:
-            self.get_logger().warning(f"Failed to convert color image: {exc}")
-            return
-
-        centroid = self.find_red_centroid(bgr)
-        if centroid is None:
-            return
-
-        depth_msg = self.depth_queue[-1]
-        depth_m = self.sample_depth(depth_msg, centroid)
+        centroid = (int(msg.point.x), int(msg.point.y))
+        depth_m = self.sample_depth(self.latest_depth, centroid)
         if depth_m is None:
             return
 
@@ -93,42 +74,6 @@ class ColorDepthPerception(Node):
                 return
 
         self.publisher.publish(pose)
-
-    def find_red_centroid(self, bgr: np.ndarray) -> Optional[Tuple[int, int]]:
-        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-        lower1 = np.array(
-            self.get_parameter("red_hsv_lower1").get_parameter_value().integer_array_value, dtype=np.uint8
-        )
-        upper1 = np.array(
-            self.get_parameter("red_hsv_upper1").get_parameter_value().integer_array_value, dtype=np.uint8
-        )
-        lower2 = np.array(
-            self.get_parameter("red_hsv_lower2").get_parameter_value().integer_array_value, dtype=np.uint8
-        )
-        upper2 = np.array(
-            self.get_parameter("red_hsv_upper2").get_parameter_value().integer_array_value, dtype=np.uint8
-        )
-
-        mask1 = cv2.inRange(hsv, lower1, upper1)
-        mask2 = cv2.inRange(hsv, lower2, upper2)
-        mask = cv2.bitwise_or(mask1, mask2)
-        mask = cv2.medianBlur(mask, 5)
-
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            return None
-
-        largest = max(contours, key=cv2.contourArea)
-        area = cv2.contourArea(largest)
-        if area < float(self.get_parameter("min_area").get_parameter_value().double_value):
-            return None
-
-        moments = cv2.moments(largest)
-        if moments["m00"] == 0:
-            return None
-        cx = int(moments["m10"] / moments["m00"])
-        cy = int(moments["m01"] / moments["m00"])
-        return cx, cy
 
     def sample_depth(self, msg: Image, centroid: Tuple[int, int]) -> Optional[float]:
         try:
@@ -181,7 +126,6 @@ class ColorDepthPerception(Node):
 
         pose = PoseStamped()
         pose.header.frame_id = frame_id
-        pose.header.stamp = camera_info.header.stamp
         pose.pose.position.x = float(x)
         pose.pose.position.y = float(y)
         pose.pose.position.z = float(z)
@@ -191,7 +135,10 @@ class ColorDepthPerception(Node):
     def transform_pose(self, pose: PoseStamped, target_frame: str) -> Optional[PoseStamped]:
         try:
             transform = self.tf_buffer.lookup_transform(
-                target_frame, pose.header.frame_id, rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=0.2)
+                target_frame,
+                pose.header.frame_id,
+                rclpy.time.Time.from_msg(pose.header.stamp),
+                timeout=rclpy.duration.Duration(seconds=0.2),
             )
         except TransformException as exc:
             self.get_logger().warning(f"TF lookup failed: {exc}")
@@ -210,7 +157,7 @@ class ColorDepthPerception(Node):
 
 def main() -> None:
     rclpy.init()
-    node = ColorDepthPerception()
+    node = PoseEstimatorNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
