@@ -176,9 +176,11 @@ def generate_launch_description():
         enable_perception_val = as_bool(enable_perception.perform(context))
         stress_test_val = as_bool(stress_test.perform(context))
         enable_color_cycle_val = as_bool(enable_color_cycle.perform(context))
+        use_legacy_perception_val = as_bool(use_legacy_perception.perform(context))
         iterations_val = int(iterations.perform(context))
         color_cycle_iterations_val = int(color_cycle_iterations.perform(context))
         csv_path_val = csv_path.perform(context)
+        perception_param_node = "/arm_perception_node" if use_legacy_perception_val else "/arm_color_detector"
 
         node = Node(
             package="arm_moveit_task",
@@ -188,6 +190,7 @@ def generate_launch_description():
                 {
                     "enable_task": enable_task_val,
                     "perception.enabled": enable_perception_val,
+                    "perception.param_node": perception_param_node,
                     "stress_test.enabled": stress_test_val,
                     "stress_test.iterations": iterations_val,
                     "color_cycle.enabled": enable_color_cycle_val,
@@ -227,7 +230,7 @@ def generate_launch_description():
         condition=UnlessCondition(use_legacy_perception),
         package="arm_moveit_task",
         executable="color_detector",
-        name="arm_perception_node",
+        name="arm_color_detector",
         output="screen",
         parameters=[
             {
@@ -242,6 +245,7 @@ def generate_launch_description():
         condition=UnlessCondition(use_legacy_perception),
         package="arm_moveit_task",
         executable="pose_estimator",
+        name="arm_pose_estimator",
         output="screen",
         parameters=[
             {
@@ -260,6 +264,7 @@ def generate_launch_description():
         condition=UnlessCondition(use_legacy_perception),
         package="arm_moveit_task",
         executable="grasp_candidates",
+        name="arm_grasp_candidates",
         output="screen",
         parameters=[
             {
@@ -274,6 +279,7 @@ def generate_launch_description():
         condition=IfCondition(use_legacy_perception),
         package="arm_moveit_task",
         executable="perception_node",
+        name="arm_perception_node",
         output="screen",
         parameters=[
             {

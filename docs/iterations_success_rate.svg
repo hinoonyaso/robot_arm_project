@@ -1,0 +1,8 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='800' height='400'>
+<rect width='100%' height='100%' fill='white'/>
+<text x='400.0' y='24' text-anchor='middle' font-family='Arial' font-size='16'>Iteration Success (1=success,0=fail)</text>
+<path d='M 50.0 350.0 L 137.5 350.0 L 225.0 350.0 L 312.5 350.0 L 400.0 350.0 L 487.5 350.0 L 575.0 350.0 L 662.5 350.0 L 750.0 350.0' fill='none' stroke='#F58518' stroke-width='2'/>
+<line x1='50' y1='350' x2='750' y2='350' stroke='#333' stroke-width='1'/>
+<line x1='50' y1='50' x2='50' y2='350' stroke='#333' stroke-width='1'/>
+<text x='15' y='50' text-anchor='middle' font-family='Arial' font-size='10'>success</text>
+</svg>

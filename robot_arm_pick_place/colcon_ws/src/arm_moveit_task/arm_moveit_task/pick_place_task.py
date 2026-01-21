@@ -15,11 +15,14 @@ from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
+from control_msgs.action import FollowJointTrajectory
 from geometry_msgs.msg import Pose, PoseStamped
-from gazebo_msgs.msg import EntityState
+from gazebo_msgs.msg import EntityState, ModelStates
 from gazebo_msgs.srv import DeleteEntity, GetEntityState, SetEntityState, SpawnEntity
 from moveit_msgs.action import ExecuteTrajectory, MoveGroup
 from moveit_msgs.msg import (
+    AllowedCollisionEntry,
+    AllowedCollisionMatrix,
     CollisionObject,
     Constraints,
     JointConstraint,
@@ -27,15 +30,20 @@ from moveit_msgs.msg import (
     MoveItErrorCodes,
     OrientationConstraint,
     PlanningOptions,
+    PlanningScene,
+    PlanningSceneComponents,
     PositionConstraint,
     RobotState,
 )
-from moveit_msgs.srv import ApplyPlanningScene
-from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+from moveit_msgs.srv import ApplyPlanningScene, GetPlanningScene, GetStateValidity
+from rcl_interfaces.msg import Parameter as ParameterMsg, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
+from rclpy.parameter import Parameter as RclpyParameter
+from sensor_msgs.msg import JointState
 from shape_msgs.msg import SolidPrimitive
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 
 class StageResult(Enum):
@@ -133,6 +141,12 @@ class PickPlaceTask(Node):
         super().__init__("arm_pick_place_task")
         self.declare_parameter("enable_task", True)
         self.declare_parameter("home_pose_joint_values", [0.0, -0.7, 1.3, 0.0, 1.0, 0.0])
+        self.declare_parameter("startup.force_home", True)
+        self.declare_parameter("startup.force_home_duration_sec", 2.0)
+        self.declare_parameter("startup.safe_joint_values", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.declare_parameter("startup.wait_for_valid_state_sec", 10.0)
+        self.declare_parameter("startup.state_check_period_sec", 0.5)
+        self.declare_parameter("startup.abort_on_invalid_state", True)
         
         # 그리퍼 좌우 회전을 위해 Yaw = 0.0 으로 설정
         self.declare_parameter("pre_grasp_pose", [0.45, 0.0, 0.80, 3.14, 0.0, 0.0])
@@ -145,9 +159,11 @@ class PickPlaceTask(Node):
         self.declare_parameter("ee_to_object_offset", [0.0, 0.0, 0.08])
         self.declare_parameter("perception.enabled", False)
         self.declare_parameter("perception.topic", "/detected_object_pose")
+        self.declare_parameter("perception.param_node", "/arm_color_detector")
         self.declare_parameter("perception.timeout_sec", 1.0)
         self.declare_parameter("perception.wait_timeout_sec", 3.0)
         self.declare_parameter("perception.use_detected_orientation", False)
+        self.declare_parameter("perception.valid_bounds", [0.3, 0.75, -0.2, 0.2, 0.65, 0.85])
         self.declare_parameter(
             "perception.grasp_candidate_offsets",
             [0.0, 0.0, 0.0, 0.02, 0.0, 0.0, -0.02, 0.0, 0.0, 0.0, 0.02, 0.0, 0.0, -0.02, 0.0],
@@ -157,6 +173,8 @@ class PickPlaceTask(Node):
         self.declare_parameter("perception.grasp_offset", [0.0, 0.0, -0.01])
         self.declare_parameter("perception.lift_offset", [0.0, 0.0, 0.16])
         self.declare_parameter("perception.attach_distance_threshold", 0.05)
+        self.declare_parameter("recovery.enabled", True)
+        self.declare_parameter("recovery.max_retries", 1)
         self.declare_parameter("stress_test.enabled", False)
         self.declare_parameter("stress_test.iterations", 100)
         self.declare_parameter("stress_test.per_stage_timeout_sec", 12.0)
@@ -169,6 +187,10 @@ class PickPlaceTask(Node):
         self.declare_parameter("metrics.log_csv", True)
         self.declare_parameter("metrics.csv_path", "/tmp/arm_pick_place_metrics.csv")
         self.declare_parameter("metrics.print_summary_every", 10)
+        self.declare_parameter("planning.profile", "stable")
+        self.declare_parameter("planning.visualize_boxes_in_perception", True)
+        self.declare_parameter("planning.scene_sync_enabled", True)
+        self.declare_parameter("planning.scene_sync_period_sec", 1.0)
         self.declare_parameter("planning.num_attempts", 1)
         self.declare_parameter("planning.allowed_time", 2.5)
         self.declare_parameter("planning.goal_timeout_sec", 4.0)
@@ -178,6 +200,36 @@ class PickPlaceTask(Node):
         self.planning_frame = "world"
         self.arm_joint_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
         self.gripper_joint_names = ["finger_left_joint", "finger_right_joint"]
+        self.robot_link_names = [
+            "base_link",
+            "link1",
+            "link2",
+            "link3",
+            "link4",
+            "link5",
+            "link6",
+            "ee_link",
+            "tool0",
+            "finger_left",
+            "finger_right",
+        ]
+        self.self_collision_allow_pairs = [
+            ("base_link", "link1"),
+            ("link1", "link2"),
+            ("link2", "link3"),
+            ("link3", "link4"),
+            ("link4", "link5"),
+            ("link5", "link6"),
+            ("link6", "ee_link"),
+            ("ee_link", "tool0"),
+            ("ee_link", "finger_left"),
+            ("ee_link", "finger_right"),
+            ("base_link", "link2"),
+            ("link2", "link4"),
+            ("finger_left", "finger_right"),
+            ("finger_left", "tool0"),
+            ("finger_right", "tool0"),
+        ]
 
         self.callback_group = ReentrantCallbackGroup()
 
@@ -187,15 +239,32 @@ class PickPlaceTask(Node):
         # MoveIt move_group action server is "move_action" (not "move_group").
         self.move_group_client = ActionClient(self, MoveGroup, "move_action", callback_group=self.callback_group)
         self.execute_client = ActionClient(self, ExecuteTrajectory, "execute_trajectory", callback_group=self.callback_group)
+        self.arm_traj_client = ActionClient(
+            self, FollowJointTrajectory, "arm_controller/follow_joint_trajectory", callback_group=self.callback_group
+        )
         self.apply_scene_client = self.create_client(ApplyPlanningScene, "apply_planning_scene", callback_group=self.callback_group)
+        self.get_scene_client = self.create_client(GetPlanningScene, "get_planning_scene", callback_group=self.callback_group)
+        self.state_validity_client = self.create_client(
+            GetStateValidity, "check_state_validity", callback_group=self.callback_group
+        )
+        perception_param_node = self.get_parameter("perception.param_node").get_parameter_value().string_value
         self.perception_param_client = self.create_client(
-            SetParameters, "/arm_perception_node/set_parameters", callback_group=self.callback_group
+            SetParameters, f"{perception_param_node}/set_parameters", callback_group=self.callback_group
         )
 
         self.attach_service = self.create_service(Trigger, "/attach", self.handle_attach, callback_group=self.callback_group)
         self.detach_service = self.create_service(Trigger, "/detach", self.handle_detach, callback_group=self.callback_group)
 
         self.detected_pose: Optional[PoseStamped] = None
+        self.latest_joint_state: Optional[JointState] = None
+
+        self.model_poses: Dict[str, Pose] = {}
+        self.create_subscription(ModelStates, "/model_states", self.handle_model_states, 10)
+        self.create_subscription(JointState, "/joint_states", self.handle_joint_states, 10)
+        scene_sync_period = self.get_parameter("planning.scene_sync_period_sec").get_parameter_value().double_value
+        self.scene_sync_timer = self.create_timer(
+            max(0.2, scene_sync_period), self.sync_scene_from_gazebo, callback_group=self.callback_group
+        )
         perception_topic = self.get_parameter("perception.topic").get_parameter_value().string_value
         self.create_subscription(
             PoseStamped,
@@ -217,8 +286,13 @@ class PickPlaceTask(Node):
             ("object_box_black", (0.55, -0.12, 0.72)),
         ]
         self.box_models = self.load_box_models()
+        self.planning_scene_pub = self.create_publisher(PlanningScene, "/planning_scene", 10)
 
         self.follow_timer = self.create_timer(1.0 / 30.0, self.follow_object, callback_group=self.callback_group)
+        self.scene_applied = False
+        self.scene_timer = self.create_timer(2.0, self.ensure_planning_scene, callback_group=self.callback_group)
+
+        self.apply_planning_profile()
 
         self.metrics_logger = MetricsLogger(
             self,
@@ -277,10 +351,15 @@ class PickPlaceTask(Node):
         state.pose = pose
         self.entity_client.call_async(SetEntityState.Request(state=state))
 
-    def add_collision_objects(self) -> None:
-        if not self.apply_scene_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warning("apply_planning_scene service not available yet, retrying...")
+    def ensure_planning_scene(self) -> None:
+        if self.scene_applied:
             return
+        self.scene_applied = self.add_collision_objects()
+
+    def add_collision_objects(self) -> bool:
+        if not self.apply_scene_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warning("apply_planning_scene service not available yet.")
+            return False
 
         table = CollisionObject()
         table.id = "table"
@@ -297,11 +376,17 @@ class PickPlaceTask(Node):
         table.primitives = [table_primitive]
         table.primitive_poses = [table_pose]
 
+        scene_msg = PlanningScene()
+        scene_msg.is_diff = True
+        scene_msg.world.collision_objects = [table]
+
         request = ApplyPlanningScene.Request()
         request.scene.is_diff = True
         request.scene.world.collision_objects = [table]
 
-        if not self.get_parameter("perception.enabled").get_parameter_value().bool_value:
+        perception_enabled = self.get_parameter("perception.enabled").get_parameter_value().bool_value
+        visualize_boxes = self.get_parameter("planning.visualize_boxes_in_perception").get_parameter_value().bool_value
+        if not perception_enabled or visualize_boxes:
             box_primitive = SolidPrimitive()
             box_primitive.type = SolidPrimitive.BOX
             box_primitive.dimensions = [0.04, 0.04, 0.04]
@@ -343,15 +428,29 @@ class PickPlaceTask(Node):
             black_box.primitive_poses = [black_pose]
 
             request.scene.world.collision_objects.extend([red_box, blue_box, black_box])
-        
+            scene_msg.world.collision_objects.extend([red_box, blue_box, black_box])
+            if perception_enabled:
+                matrix = self.build_box_visualization_matrix([red_box.id, blue_box.id, black_box.id])
+                if matrix is not None:
+                    request.scene.allowed_collision_matrix = matrix
+                    scene_msg.allowed_collision_matrix = matrix
+
+        scene_msg.robot_state.is_diff = True
+        self.planning_scene_pub.publish(scene_msg)
+
         future = self.apply_scene_client.call_async(request)
         try:
             if not self.wait_for_future(future, timeout_sec=2.0):
                 raise TimeoutError("apply_planning_scene timeout")
-            _ = future.result()
+            response = future.result()
+            if response is None or not response.success:
+                self.get_logger().warning("Failed to apply planning scene.")
+                return False
             self.get_logger().info("Collision objects added.")
+            return True
         except Exception as e:
             self.get_logger().warning(f"Failed to add collision objects: {e}")
+            return False
 
     def reset_object_pose(self) -> bool:
         service_ready = False
@@ -386,6 +485,78 @@ class PickPlaceTask(Node):
                 success = False
         return success
 
+    def handle_model_states(self, msg: ModelStates) -> None:
+        targets = {"table", "object_box_red", "object_box_blue", "object_box_black"}
+        for name, pose in zip(msg.name, msg.pose):
+            if name in targets:
+                self.model_poses[name] = pose
+
+    def handle_joint_states(self, msg: JointState) -> None:
+        self.latest_joint_state = msg
+
+    def wait_for_valid_start_state(self) -> bool:
+        timeout_sec = self.get_parameter("startup.wait_for_valid_state_sec").get_parameter_value().double_value
+        period = self.get_parameter("startup.state_check_period_sec").get_parameter_value().double_value
+        deadline = time.monotonic() + max(0.1, timeout_sec)
+        while time.monotonic() < deadline:
+            if self.latest_joint_state is None:
+                time.sleep(max(0.05, period))
+                continue
+            if not self.state_validity_client.wait_for_service(timeout_sec=0.5):
+                time.sleep(max(0.05, period))
+                continue
+            request = GetStateValidity.Request()
+            request.group_name = "arm"
+            request.robot_state.joint_state = self.latest_joint_state
+            future = self.state_validity_client.call_async(request)
+            if not self.wait_for_future(future, timeout_sec=1.0):
+                time.sleep(max(0.05, period))
+                continue
+            response = future.result()
+            if response is not None and response.valid:
+                return True
+            time.sleep(max(0.05, period))
+        return False
+
+    def sync_scene_from_gazebo(self) -> None:
+        if not self.scene_applied:
+            return
+        if not self.get_parameter("planning.scene_sync_enabled").get_parameter_value().bool_value:
+            return
+        if not self.apply_scene_client.wait_for_service(timeout_sec=0.2):
+            return
+
+        updates: List[CollisionObject] = []
+        table_pose = self.model_poses.get("table")
+        if table_pose is not None:
+            updates.append(self.make_box_collision("table", table_pose, [0.8, 0.6, 0.7]))
+
+        for name in ("object_box_red", "object_box_blue", "object_box_black"):
+            pose = self.model_poses.get(name)
+            if pose is None:
+                continue
+            updates.append(self.make_box_collision(name, pose, [0.04, 0.04, 0.04]))
+
+        if not updates:
+            return
+
+        request = ApplyPlanningScene.Request()
+        request.scene.is_diff = True
+        request.scene.world.collision_objects = updates
+        self.apply_scene_client.call_async(request)
+
+    def make_box_collision(self, object_id: str, pose: Pose, dimensions: List[float]) -> CollisionObject:
+        obj = CollisionObject()
+        obj.id = object_id
+        obj.header.frame_id = self.planning_frame
+        obj.operation = CollisionObject.ADD
+        primitive = SolidPrimitive()
+        primitive.type = SolidPrimitive.BOX
+        primitive.dimensions = list(dimensions)
+        obj.primitives = [primitive]
+        obj.primitive_poses = [pose]
+        return obj
+
     def task_loop(self) -> None:
         self.get_logger().info("Task Thread Started. Waiting for system initialization...")
         time.sleep(3.0) 
@@ -413,8 +584,21 @@ class PickPlaceTask(Node):
         # 3. 액션 서버 연결 대기
         self.wait_for_action(self.move_group_client, "move_action")
         self.wait_for_action(self.execute_client, "execute_trajectory")
+        self.wait_for_action(self.arm_traj_client, "arm_controller/follow_joint_trajectory")
+        if self.get_parameter("startup.force_home").get_parameter_value().bool_value:
+            if self.force_move_home():
+                self.get_logger().info("Force home completed before planning.")
+            else:
+                self.get_logger().warning("Force home failed; planning may start in collision.")
         
         self.add_collision_objects()
+
+        if not self.wait_for_valid_start_state():
+            message = "Start state is still invalid after timeout."
+            if self.get_parameter("startup.abort_on_invalid_state").get_parameter_value().bool_value:
+                self.get_logger().error(message + " Aborting task.")
+                return
+            self.get_logger().warning(message + " Continuing anyway.")
         
         if not self.get_parameter("enable_task").get_parameter_value().bool_value:
             self.get_logger().info("Task execution disabled; services only mode.")
@@ -505,30 +689,45 @@ class PickPlaceTask(Node):
 
     def run_single_iteration(self, iteration_id: int) -> bool:
         if self.get_parameter("perception.enabled").get_parameter_value().bool_value:
-            if self.wait_for_detected_pose() is None:
-                self.get_logger().warning(
-                    "Perception enabled but no detected pose available; skipping motion."
-                )
-                return False
-            candidates = self.build_grasp_candidates()
-            if not candidates:
-                self.get_logger().warning("Perception enabled but failed to build grasp candidates.")
-                return False
-            for index, grasp_target in enumerate(candidates, start=1):
-                stages = [
-                    (f"cand{index}_grasp", lambda: self.plan_pose(grasp_target)),
-                    (f"cand{index}_close_gripper", self.close_gripper),
-                    (f"cand{index}_attach", self.attach_object),
-                    (f"cand{index}_pre_place", lambda: self.plan_pose_stage("pre_place_pose")),
-                    (f"cand{index}_place", lambda: self.plan_pose_stage("place_pose")),
-                    (f"cand{index}_open_gripper", self.open_gripper),
-                    (f"cand{index}_detach", self.detach_object),
-                ]
+            max_retries = int(
+                self.get_parameter("recovery.max_retries").get_parameter_value().integer_value
+            )
+            recovery_enabled = self.get_parameter("recovery.enabled").get_parameter_value().bool_value
+            for attempt in range(max_retries + 1):
+                if self.wait_for_detected_pose() is None:
+                    self.get_logger().warning(
+                        "Perception enabled but no detected pose available; skipping motion."
+                    )
+                    if recovery_enabled and attempt < max_retries:
+                        self.recover_after_failure()
+                        continue
+                    return False
+                candidates = self.build_grasp_candidates()
+                if not candidates:
+                    self.get_logger().warning("Perception enabled but failed to build grasp candidates.")
+                    if recovery_enabled and attempt < max_retries:
+                        self.recover_after_failure()
+                        continue
+                    return False
+                for index, grasp_target in enumerate(candidates, start=1):
+                    stages = [
+                        (f"cand{index}_grasp", lambda: self.plan_pose(grasp_target)),
+                        (f"cand{index}_close_gripper", self.close_gripper),
+                        (f"cand{index}_attach", self.attach_object),
+                        (f"cand{index}_pre_place", lambda: self.plan_pose_stage("pre_place_pose")),
+                        (f"cand{index}_place", lambda: self.plan_pose_stage("place_pose")),
+                        (f"cand{index}_open_gripper", self.open_gripper),
+                        (f"cand{index}_detach", self.detach_object),
+                    ]
 
-                if self.run_stage_sequence(iteration_id, stages):
-                    return True
-            self.get_logger().warning("All grasp candidates failed.")
-            return False
+                    if self.run_stage_sequence(iteration_id, stages):
+                        return True
+                self.get_logger().warning("All grasp candidates failed.")
+                if recovery_enabled and attempt < max_retries:
+                    self.get_logger().warning("Recovering and retrying perception iteration.")
+                    self.recover_after_failure()
+                    continue
+                return False
         else:
             stages = [
                 ("home", self.move_home),
@@ -560,7 +759,7 @@ class PickPlaceTask(Node):
 
         params = []
         for name, values in hsv_config.items():
-            param = Parameter()
+            param = ParameterMsg()
             param.name = name
             param.value = ParameterValue(type=ParameterType.PARAMETER_INTEGER_ARRAY, integer_array_value=values)
             params.append(param)
@@ -659,6 +858,9 @@ class PickPlaceTask(Node):
                     timestamp=time.time(),
                 )
             )
+            self.get_logger().info(
+                f"Stage {name}: {result.value} | plan {plan_time:.0f} ms | exec {exec_time:.0f} ms | retries {retries}"
+            )
             if result != StageResult.SUCCESS:
                 self.get_logger().warning(f"Iteration {iteration_id} stage {name} failed: {result.value}")
                 return False
@@ -696,13 +898,56 @@ class PickPlaceTask(Node):
         joints = self.get_parameter("home_pose_joint_values").get_parameter_value().double_array_value
         return self.plan_joint_stage("arm", self.arm_joint_names, list(joints))
 
+    def force_move_home(self) -> bool:
+        if not self.arm_traj_client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().warning("arm_controller follow_joint_trajectory action not available.")
+            return False
+        joints = list(self.get_parameter("startup.safe_joint_values").get_parameter_value().double_array_value)
+        if len(joints) != len(self.arm_joint_names):
+            self.get_logger().warning("startup.safe_joint_values length mismatch.")
+            return False
+        duration = float(self.get_parameter("startup.force_home_duration_sec").get_parameter_value().double_value)
+        duration = max(0.5, duration)
+
+        traj = JointTrajectory()
+        traj.joint_names = list(self.arm_joint_names)
+        point = JointTrajectoryPoint()
+        point.positions = joints
+        point.time_from_start.sec = int(duration)
+        point.time_from_start.nanosec = int((duration - int(duration)) * 1e9)
+        traj.points = [point]
+
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory = traj
+        send_future = self.arm_traj_client.send_goal_async(goal)
+        if not self.wait_for_future(send_future, timeout_sec=5.0):
+            return False
+        goal_handle = send_future.result()
+        if not goal_handle or not goal_handle.accepted:
+            return False
+        result_future = goal_handle.get_result_async()
+        if not self.wait_for_future(result_future, timeout_sec=duration + 5.0):
+            return False
+        result = result_future.result()
+        if result is None:
+            return False
+        if result.result.error_code != 0:
+            self.get_logger().warning(f"Force home failed with error {result.result.error_code}")
+            return False
+        return True
+
     def plan_pose_stage(self, param_name: str) -> Tuple[StageResult, float, float]:
         pose = self.build_target_pose(param_name)
         return self.plan_pose(pose)
 
     def plan_pose(self, pose: Pose) -> Tuple[StageResult, float, float]:
         constraints = self.pose_constraints(pose)
-        return self.plan_and_execute("arm", constraints)
+        result = self.plan_and_execute("arm", constraints)
+        if result[0] == StageResult.PLAN_FAIL:
+            self.get_logger().warning(
+                f"Plan failed for pose x={pose.position.x:.3f}, y={pose.position.y:.3f}, z={pose.position.z:.3f}"
+            )
+        return result
 
     def close_gripper(self) -> Tuple[StageResult, float, float]:
         return self.plan_joint_stage("gripper", self.gripper_joint_names, [0.0, 0.0])
@@ -746,7 +991,9 @@ class PickPlaceTask(Node):
             self.follow_object()
             if not self.verify_attached():
                 self.attach_active = False
+                self.get_logger().warning("GRASP_FAIL: attachment verification failed.")
                 return StageResult.ATTACH_FAIL, 0.0, 0.0
+            self.get_logger().info("GRASP_SUCCESS: object attached to gripper.")
         return StageResult.SUCCESS, 0.0, 0.0
 
     def detach_object(self) -> Tuple[StageResult, float, float]:
@@ -816,7 +1063,10 @@ class PickPlaceTask(Node):
             
         result = res.result
         if result.error_code.val != MoveItErrorCodes.SUCCESS:
-            self.get_logger().error(f"Planning failed with error code: {result.error_code.val}")
+            error_name = self.error_code_to_string(result.error_code.val)
+            self.get_logger().error(
+                f"Planning failed with error code: {result.error_code.val} ({error_name})"
+            )
             return None
         return result.planned_trajectory
 
@@ -938,7 +1188,10 @@ class PickPlaceTask(Node):
         stamp = rclpy.time.Time.from_msg(self.detected_pose.header.stamp)
         if (now - stamp).nanoseconds > int(timeout_sec * 1e9):
             return None
-        return self.detected_pose.pose
+        pose = self.detected_pose.pose
+        if not self.is_pose_valid(pose):
+            return None
+        return pose
 
     def get_current_ee_pose(self) -> Optional[Pose]:
         try:
@@ -987,6 +1240,106 @@ class PickPlaceTask(Node):
         threshold = self.get_parameter("perception.attach_distance_threshold").get_parameter_value().double_value
         return (dx * dx + dy * dy + dz * dz) ** 0.5 <= threshold
 
+    def build_box_visualization_matrix(self, box_ids: List[str]) -> Optional[AllowedCollisionMatrix]:
+        existing = self.get_allowed_collision_matrix()
+        names = list(existing.entry_names) if existing and existing.entry_names else []
+        if not names:
+            names = list(self.robot_link_names)
+
+        names.extend([box_id for box_id in box_ids if box_id not in names])
+        size = len(names)
+        matrix = AllowedCollisionMatrix()
+        matrix.entry_names = names
+        matrix.entry_values = [AllowedCollisionEntry(enabled=[False] * size) for _ in range(size)]
+
+        index = {name: idx for idx, name in enumerate(names)}
+        if existing and existing.entry_names:
+            for row_idx, entry in enumerate(existing.entry_values):
+                if row_idx >= len(existing.entry_names):
+                    break
+                row_name = existing.entry_names[row_idx]
+                new_row_idx = index.get(row_name)
+                if new_row_idx is None:
+                    continue
+                for col_idx, enabled in enumerate(entry.enabled):
+                    if col_idx >= len(existing.entry_names):
+                        break
+                    col_name = existing.entry_names[col_idx]
+                    new_col_idx = index.get(col_name)
+                    if new_col_idx is None:
+                        continue
+                    matrix.entry_values[new_row_idx].enabled[new_col_idx] = enabled
+        else:
+            for link_a, link_b in self.self_collision_allow_pairs:
+                idx_a = index.get(link_a)
+                idx_b = index.get(link_b)
+                if idx_a is None or idx_b is None:
+                    continue
+                matrix.entry_values[idx_a].enabled[idx_b] = True
+                matrix.entry_values[idx_b].enabled[idx_a] = True
+
+        for box_id in box_ids:
+            box_idx = index.get(box_id)
+            if box_idx is None:
+                continue
+            for link_name in self.robot_link_names:
+                link_idx = index.get(link_name)
+                if link_idx is None:
+                    continue
+                matrix.entry_values[box_idx].enabled[link_idx] = True
+                matrix.entry_values[link_idx].enabled[box_idx] = True
+        return matrix
+
+    def get_allowed_collision_matrix(self) -> Optional[AllowedCollisionMatrix]:
+        if not self.get_scene_client.wait_for_service(timeout_sec=1.0):
+            return None
+        request = GetPlanningScene.Request()
+        request.components = PlanningSceneComponents(components=PlanningSceneComponents.ALLOWED_COLLISION_MATRIX)
+        future = self.get_scene_client.call_async(request)
+        if not self.wait_for_future(future, timeout_sec=2.0):
+            return None
+        response = future.result()
+        if response is None:
+            return None
+        return response.scene.allowed_collision_matrix
+
+    @staticmethod
+    def error_code_to_string(code: int) -> str:
+        mapping = {
+            MoveItErrorCodes.SUCCESS: "SUCCESS",
+            MoveItErrorCodes.PLANNING_FAILED: "PLANNING_FAILED",
+            MoveItErrorCodes.INVALID_MOTION_PLAN: "INVALID_MOTION_PLAN",
+            MoveItErrorCodes.MOTION_PLAN_INVALIDATED_BY_ENVIRONMENT_CHANGE: "PLAN_INVALIDATED_BY_ENV",
+            MoveItErrorCodes.CONTROL_FAILED: "CONTROL_FAILED",
+            MoveItErrorCodes.UNABLE_TO_AQUIRE_SENSOR_DATA: "SENSOR_DATA_FAILED",
+            MoveItErrorCodes.TIMED_OUT: "TIMED_OUT",
+            MoveItErrorCodes.PREEMPTED: "PREEMPTED",
+            MoveItErrorCodes.START_STATE_IN_COLLISION: "START_STATE_IN_COLLISION",
+            MoveItErrorCodes.START_STATE_VIOLATES_PATH_CONSTRAINTS: "START_STATE_VIOLATES_CONSTRAINTS",
+            MoveItErrorCodes.GOAL_IN_COLLISION: "GOAL_IN_COLLISION",
+            MoveItErrorCodes.GOAL_VIOLATES_PATH_CONSTRAINTS: "GOAL_VIOLATES_CONSTRAINTS",
+            MoveItErrorCodes.INVALID_GROUP_NAME: "INVALID_GROUP_NAME",
+            MoveItErrorCodes.INVALID_GOAL_CONSTRAINTS: "INVALID_GOAL_CONSTRAINTS",
+            MoveItErrorCodes.INVALID_ROBOT_STATE: "INVALID_ROBOT_STATE",
+        }
+        return mapping.get(code, "UNKNOWN")
+
+    def is_pose_valid(self, pose: Pose) -> bool:
+        bounds = self.get_parameter("perception.valid_bounds").get_parameter_value().double_array_value
+        if len(bounds) != 6:
+            return True
+        xmin, xmax, ymin, ymax, zmin, zmax = bounds
+        x, y, z = pose.position.x, pose.position.y, pose.position.z
+        if any(value != value for value in (x, y, z)):
+            self.get_logger().warning("Perception pose invalid: NaN detected.")
+            return False
+        if not (xmin <= x <= xmax and ymin <= y <= ymax and zmin <= z <= zmax):
+            self.get_logger().warning(
+                f"Perception pose out of bounds: x={x:.3f}, y={y:.3f}, z={z:.3f}."
+            )
+            return False
+        return True
+
     def wait_for_detected_pose(self) -> Optional[Pose]:
         timeout = self.get_parameter("perception.wait_timeout_sec").get_parameter_value().double_value
         deadline = time.monotonic() + max(0.1, timeout)
@@ -1002,6 +1355,29 @@ class PickPlaceTask(Node):
         self.open_gripper()
         self.move_home()
         self.reset_object_pose()
+
+    def apply_planning_profile(self) -> None:
+        profile = self.get_parameter("planning.profile").get_parameter_value().string_value.lower()
+        if profile not in ("fast", "stable"):
+            self.get_logger().warning(f"Unknown planning.profile '{profile}', using current values.")
+            return
+        if profile == "fast":
+            overrides = {
+                "planning.allowed_time": 1.0,
+                "planning.goal_timeout_sec": 1.5,
+                "planning.result_timeout_sec": 2.0,
+                "planning.num_attempts": 1,
+            }
+        else:
+            overrides = {
+                "planning.allowed_time": 2.5,
+                "planning.goal_timeout_sec": 4.0,
+                "planning.result_timeout_sec": 4.0,
+                "planning.num_attempts": 1,
+            }
+        params = [RclpyParameter(name, value=value) for name, value in overrides.items()]
+        self.set_parameters(params)
+        self.get_logger().info(f"Planning profile applied: {profile}")
 
     @staticmethod
     def joint_constraints(joint_names: List[str], positions: List[float]) -> Constraints:
@@ -1053,7 +1429,11 @@ def main() -> None:
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            try:
+                rclpy.shutdown()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
