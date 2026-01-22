@@ -123,18 +123,51 @@ ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true stress_test:=true
 1) **Plan 실패**: 장애물 간섭 또는 역기구학 실패 → pre_grasp/ pre_place 목표를 z+0.02 오프셋 후 재시도.
 2) **Timeout**: planning 시간 과다 → planner 파라미터(ompl_planning.yaml)에서 range/attempts 조정 및 재시도.
 
-## 성능 지표 예시 (스트레스 테스트)
-- 성공률: 97%
-- 평균 plan 시간: 220 ms
-- 평균 exec 시간: 540 ms
-- 실패 Top3: PLAN_FAIL(2), TIMEOUT(1)
+## 성능 지표 (스트레스 테스트 결과)
+실행 커맨드:
+```bash
+source install/setup.bash
+ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true stress_test:=true iterations:=100 csv_path:=/tmp/arm_pick_place_metrics.csv
+```
 
-CSV 일부 샘플:
-```
-iteration_id,stage_name,plan_success,exec_success,plan_time_ms,exec_time_ms,retries_used,fail_reason,timestamp
-1,home,1,1,120.5,310.4,0,SUCCESS,1700000000.000
-1,pre_grasp,1,1,180.2,480.1,0,SUCCESS,1700000002.000
-```
+전체 요약 (행 기준)
+| 항목 | 값 |
+|---|---|
+| 총 기록 행(rows) | 630 |
+| iterations | 100 |
+| stage 종류 | 12 |
+| 행(row) 성공률 | 86.19% |
+| iteration 성공률* | 36.00% |
+| plan_time 평균 / p50 / p95 (ms) | 851.42 / 31.74 / 3782.11 |
+| exec_time 평균 / p50 / p95 (ms) | 2051.95 / 1482.99 / 6837.89 |
+| retries_used 평균 | 0.32 |
+
+* iteration 성공률 정의: 해당 iteration에 등장한 모든 stage가 “성공(row)”을 한 번 이상 기록해야 성공으로 집계.
+
+스테이지별 성능/성공률 요약
+| stage_name | runs | 성공 runs | 성공률(%) | plan(ms) 평균 | plan p50 | plan p95 | exec(ms) 평균 | exec p50 | exec p95 | retries 평균 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| home | 128 | 67 | 52.3 | 275.37 | 27.80 | 41.50 | 1401.41 | 259.45 | 4074.56 | 0.97 |
+| reset_object | 65 | 53 | 81.5 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.37 |
+| pre_grasp | 53 | 50 | 94.3 | 1879.13 | 1566.09 | 4695.40 | 3156.43 | 3154.50 | 4757.74 | 0.11 |
+| grasp | 50 | 44 | 88.0 | 2908.77 | 2818.56 | 5265.95 | 4361.71 | 4107.72 | 7967.31 | 0.70 |
+| lift | 44 | 43 | 97.7 | 1320.12 | 1088.74 | 2884.28 | 4263.74 | 3707.66 | 8190.36 | 0.05 |
+| attach | 44 | 44 | 100.0 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| close_gripper | 44 | 44 | 100.0 | 25.15 | 25.16 | 37.78 | 395.05 | 410.01 | 509.17 | 0.02 |
+| open_gripper | 42 | 38 | 90.5 | 25.51 | 25.14 | 38.38 | 392.75 | 411.26 | 503.78 | 0.19 |
+| place | 42 | 42 | 100.0 | 2095.23 | 1823.20 | 4636.96 | 3989.65 | 3833.26 | 6996.97 | 0.05 |
+| pre_place | 42 | 42 | 100.0 | 1348.20 | 1149.05 | 2560.91 | 4091.33 | 3930.06 | 7328.83 | 0.05 |
+| detach | 38 | 38 | 100.0 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| retreat | 38 | 38 | 100.0 | 1348.02 | 1035.42 | 3311.12 | 4397.09 | 4204.86 | 7448.44 | 0.00 |
+
+실패 사유 분포 (실패 행만)
+| fail_reason | count | 비중(%) |
+|---|---:|---:|
+| EXEC_FAIL | 51 | 58.6 |
+| PLAN_FAIL | 32 | 36.8 |
+| TIMEOUT | 4 | 4.6 |
+
+한 줄 해석: iteration 성공률(36%)을 깎는 1순위는 **home 단계 성공률(52.3%)**이며, 실패 사유는 **EXEC_FAIL(58.6%)** 비중이 가장 큽니다.
 
 ## 트러블슈팅
 - **Controller 안 뜸**: gazebo_ros2_control 플러그인 로드 여부와 ros2_controllers.yaml 경로 확인.
