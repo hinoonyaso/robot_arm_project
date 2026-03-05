@@ -5,9 +5,14 @@
 - Python 상태머신 노드가 Pick & Place 시퀀스를 자동 수행하며, /attach /detach 기반 EE 추종 방식으로 재현성을 높였습니다.
 - 100회 스트레스 테스트 옵션으로 성공률/평균 시간/실패 Top3를 CSV로 자동 기록합니다.
 
-## 데모 링크 자리
-- Demo GIF: (링크 추가 예정)
-- Demo Video: (링크 추가 예정)
+## 30초 요약 카드
+- Stack: ROS2 Humble, Gazebo Classic, ros2_control, MoveIt2(OMPL), RViz2
+- What I built: Pick&Place 상태머신 + attach/detach EE 추종 + 100회 스트레스 테스트 로그/CSV
+- Result: iteration 성공률 36.00%, 병목 stage = home(52.3%), fail top = EXEC_FAIL(58.6%)
+
+## 포트폴리오 포지션
+- 이 프로젝트의 핵심은 `MoveIt2 기반 Pick&Place 파이프라인(계획-실행)`과 `신뢰성 검증(스트레스 테스트/메트릭)`입니다.
+- 로봇 소프트웨어 핵심 영역 중 Manipulation 역량을 보여주며, 상태머신/실패복구/지표화를 end-to-end로 구성했습니다.
 
 ## 아키텍처 다이어그램
 ```mermaid
@@ -36,6 +41,13 @@ flowchart LR
   task --> gazebo[Gazebo /set_entity_state]
   rviz --> moveit
 ```
+
+## 파이프라인
+Task State Machine  
+-> MoveIt2 planning (`/move_group`)  
+-> trajectory execution (`/execute_trajectory`)  
+-> attach/detach EE tracking  
+-> retry/recovery + metrics logging
 
 ## 패키지별 역할
 - **arm_description**: URDF/Xacro, ros2_control 태그, 링크/관절 정의.
@@ -90,7 +102,7 @@ ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true stress_test:=true
 
 ### 로봇팔 동작시키는 방법 (RViz)
 1. RViz2에서 `MotionPlanning` 패널을 열고 `Planning Group`을 `arm`으로 선택합니다.
-2. 목표 포즈를 인터랙티브 마커로 이동한 뒤 **Plan** → **Execute**를 클릭합니다.
+2. 목표 포즈를 인터랙티브 마커로 이동한 뒤 **Plan** -> **Execute**를 클릭합니다.
 3. 그리퍼는 `gripper` 그룹을 선택해 `Joint` 값을 조정 후 **Plan/Execute**로 제어합니다.
 
 ## 토픽/서비스/액션 표
@@ -120,8 +132,8 @@ ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true stress_test:=true
 | retreat | 후퇴 | plan+execute 성공 | 실패 시 재시도 |
 
 ## 실패 케이스 + 복구 전략
-1) **Plan 실패**: 장애물 간섭 또는 역기구학 실패 → pre_grasp/ pre_place 목표를 z+0.02 오프셋 후 재시도.
-2) **Timeout**: planning 시간 과다 → planner 파라미터(ompl_planning.yaml)에서 range/attempts 조정 및 재시도.
+1) **Plan 실패**: 장애물 간섭 또는 역기구학 실패 -> pre_grasp/ pre_place 목표를 z+0.02 오프셋 후 재시도.
+2) **Timeout**: planning 시간 과다 -> planner 파라미터(ompl_planning.yaml)에서 range/attempts 조정 및 재시도.
 
 ## 성능 지표 (스트레스 테스트 결과)
 실행 커맨드:
@@ -129,6 +141,14 @@ ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true stress_test:=true
 source install/setup.bash
 ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true stress_test:=true iterations:=100 csv_path:=/tmp/arm_pick_place_metrics.csv
 ```
+
+### Key Findings
+- iteration 성공률은 **36.00%**이며, 누적 stage 성공 조건 때문에 row 성공률(86.19%)보다 낮게 집계됩니다.
+- 병목 stage는 **home (52.3%)**입니다.
+- 실패 사유 1순위는 **EXEC_FAIL (58.6%)**입니다.
+
+<details>
+<summary>상세 메트릭 표 보기</summary>
 
 전체 요약 (행 기준)
 | 항목 | 값 |
@@ -142,7 +162,7 @@ ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true stress_test:=true
 | exec_time 평균 / p50 / p95 (ms) | 2051.95 / 1482.99 / 6837.89 |
 | retries_used 평균 | 0.32 |
 
-* iteration 성공률 정의: 해당 iteration에 등장한 모든 stage가 “성공(row)”을 한 번 이상 기록해야 성공으로 집계.
+* iteration 성공률 정의: 해당 iteration에 등장한 모든 stage가 "성공(row)"을 한 번 이상 기록해야 성공으로 집계.
 
 스테이지별 성능/성공률 요약
 | stage_name | runs | 성공 runs | 성공률(%) | plan(ms) 평균 | plan p50 | plan p95 | exec(ms) 평균 | exec p50 | exec p95 | retries 평균 |
@@ -168,6 +188,8 @@ ros2 launch arm_gazebo bringup_all.launch.py enable_task:=true stress_test:=true
 | TIMEOUT | 4 | 4.6 |
 
 한 줄 해석: iteration 성공률(36%)을 깎는 1순위는 **home 단계 성공률(52.3%)**이며, 실패 사유는 **EXEC_FAIL(58.6%)** 비중이 가장 큽니다.
+
+</details>
 
 ## 트러블슈팅
 - **Controller 안 뜸**: gazebo_ros2_control 플러그인 로드 여부와 ros2_controllers.yaml 경로 확인.
